@@ -6,7 +6,13 @@ from django.db import models
 
 
 class User(AbstractUser):
-    """Пользователь — владелец питомцев."""
+    """Пользователь — владелец питомцев.
+    Почта обязательна и уникальна: по ней тоже можно войти."""
+    email = models.EmailField(
+        "Почта",
+        unique=True,
+        error_messages={"unique": "Пользователь с такой почтой уже существует."},
+    )
     phone = models.CharField("Телефон", max_length=20, blank=True)
     avatar = models.ImageField("Аватар", upload_to="users/", blank=True, null=True)
 

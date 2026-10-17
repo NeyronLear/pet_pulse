@@ -112,7 +112,12 @@ async function request(method, path, body) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
-    throw new ApiError(`${method} ${path}: ${response.status}`, response.status);
+    // Ошибки вьюх приходят как {"detail": "..."} — этот текст можно показать пользователю.
+    const error = await response.json().catch(() => null);
+    throw new ApiError(
+      error?.detail || `${method} ${path}: ${response.status}`,
+      response.status,
+    );
   }
   const text = await response.text();
   return text ? JSON.parse(text) : null;
@@ -267,6 +272,16 @@ const api = {
   },
 };
 
+// Вход и регистрация: сервер сам ставит cookie сессии и возвращает пользователя.
+const auth = {
+  me: () => request("GET", "/auth/me"),
+  updateMe: (body) => request("PUT", "/auth/me", body),
+  changePassword: (body) => request("POST", "/auth/password", body),
+  login: (body) => request("POST", "/auth/login", body),
+  register: (body) => request("POST", "/auth/register", body),
+  logout: () => request("POST", "/auth/logout"),
+};
+
 async function saveItem(bucket, item) {
   const saved = await api.save(bucket, item);
   const index = state[bucket].findIndex((x) => sameId(x.id, saved.id));
@@ -285,7 +300,7 @@ async function removeItem(bucket, id) {
 const petName = (id) => findById(state.pets, id)?.name ?? "Питомец не найден";
 
 // Состояние интерфейса, которое не нужно хранить в базе.
-const ui = { day: todayKey(), foodFilter: "Все", editing: null };
+const ui = { day: todayKey(), foodFilter: "Все", editing: null, user: null };
 
 let toastTimer;
 function toast(message) {
@@ -616,15 +631,76 @@ function reminderItem(item) {
     </div>`;
 }
 
+// ---------- Страница «Профиль» ----------
+
+const fullName = (user) => [user.first_name, user.last_name].filter(Boolean).join(" ");
+
+function profileView() {
+  const user = ui.user;
+  const stats = [
+    ["Питомцев", state.pets.length],
+    ["Записей здоровья", state.health.length],
+    ["Напоминаний", state.events.length],
+    ["Записей о питании", state.food.length],
+  ];
+  return html`
+    ${pageHeading({
+      title: "Мой профиль",
+      note: "Ваши данные и настройки входа.",
+      kind: "profile",
+      button: "Редактировать профиль",
+    })}
+    <div class="profile">
+      <section class="card profile-card">
+        <div class="avatar">${initial(fullName(user) || user.username).toUpperCase()}</div>
+        <h2>${fullName(user) || user.username}</h2>
+        <p class="muted">@${user.username}</p>
+        <dl>
+          <dt>Почта</dt>
+          <dd>${user.email}</dd>
+          <dt>Телефон</dt>
+          <dd>${user.phone || "Не указан"}</dd>
+          <dt>С нами с</dt>
+          <dd>${new Date(`${user.date_joined}T12:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}</dd>
+        </dl>
+      </section>
+      <div class="profile-side">
+        <section class="card">
+          <div class="section-head">
+            <h2>Забота в цифрах</h2>
+          </div>
+          <div class="profile-stats">
+            ${stats.map(([label, value]) => html`
+              <div>
+                <div class="metric">${value}</div>
+                <p class="muted">${label}</p>
+              </div>`)}
+          </div>
+        </section>
+        <section class="card">
+          <div class="section-head">
+            <h2>Безопасность</h2>
+          </div>
+          <p class="muted">Используйте надёжный пароль, который не совпадает с логином и почтой.</p>
+          <div class="actions">
+            <button class="button light" data-action="add" data-kind="password">Сменить пароль</button>
+            <button class="button-danger" data-action="logout">Выйти из аккаунта</button>
+          </div>
+        </section>
+      </div>
+    </div>`;
+}
+
 // ---------- Страницы и навигация ----------
 
-// title показывается в шапке: «Моё пространство / <title>».
+// title показывается во вкладке браузера: «<title> · PetPulse».
 const PAGES = {
   home: { title: "Главная", view: homeView },
   pets: { title: "Мои питомцы", view: petsView },
   health: { title: "Здоровье", view: healthView },
   food: { title: "Питание", view: foodView },
   reminders: { title: "Напоминания", view: remindersView },
+  profile: { title: "Профиль", view: profileView },
 };
 
 // location.hash начинается с «#», поэтому первый символ отбрасываем.
@@ -635,7 +711,7 @@ function currentPage() {
 
 function render() {
   const page = currentPage();
-  $("#section-name").textContent = PAGES[page].title;
+  document.title = `${PAGES[page].title} · PetPulse`;
   document
     .querySelectorAll("nav a")
     .forEach((link) => link.classList.toggle("active", link.hash === `#${page}`));
@@ -648,12 +724,12 @@ function render() {
 function inputField(
   name,
   label,
-  { type = "text", value = "", required = false, attrs = "" } = {},
+  { type = "text", value = "", required = false, maxlength = 100, attrs = "" } = {},
 ) {
   return html`
     <div class="field">
       <label for="field-${name}">${label}${required && " *"}</label>
-      <input id="field-${name}" name="${name}" type="${type}" value="${value}" maxlength="100" ${attrs} ${required && "required"}>
+      <input id="field-${name}" name="${name}" type="${type}" value="${value}" maxlength="${maxlength}" ${attrs} ${required && "required"}>
     </div>`;
 }
 
@@ -694,10 +770,14 @@ const HISTORY_TYPES = [
 //   bucket   — ключ state (он же ресурс в RESOURCES), куда сохраняем
 //   defaults — поля, которых нет в форме, но нужны новой записи (получает id из openEditor)
 //   find     — как искать редактируемую запись, если не по её id
+//   save     — своё сохранение вместо saveItem (для форм, не связанных с питомцами)
+//   noPet    — форму можно открыть, даже если питомцев ещё нет
+//   check    — проверка значений до отправки, возвращает текст ошибки
 //   title, fields — заголовок и набор полей; item — редактируемая запись, если она есть
 const EDITORS = {
   pet: {
     bucket: "pets",
+    noPet: true,
     title: (item) => (item ? "Карточка питомца" : "Знакомимся с питомцем"),
     fields: (item = {}) => [
       inputField("name", "Имя", { value: item.name, required: true }),
@@ -769,21 +849,49 @@ const EDITORS = {
       textareaField("notes", "Заметки", card.notes),
     ],
   },
+  profile: {
+    noPet: true,
+    find: () => ui.user,
+    save: async (values) => showAccount(await auth.updateMe(values)),
+    title: () => "Редактирование профиля",
+    fields: (user) => [
+      inputField("username", "Логин", { value: user.username, required: true, maxlength: 150 }),
+      inputField("email", "Почта", { type: "email", value: user.email, required: true, maxlength: 254 }),
+      inputField("phone", "Телефон", { type: "tel", value: user.phone, maxlength: 20 }),
+      inputField("first_name", "Имя", { value: user.first_name, maxlength: 150 }),
+      inputField("last_name", "Фамилия", { value: user.last_name, maxlength: 150 }),
+    ],
+  },
+  password: {
+    noPet: true,
+    save: ({ old_password, new_password }) =>
+      auth.changePassword({ old_password, new_password }),
+    check: ({ new_password, new_password2 }) =>
+      new_password === new_password2 ? "" : "Пароли не совпадают.",
+    title: () => "Смена пароля",
+    fields: () => [
+      inputField("old_password", "Текущий пароль", { type: "password", required: true, maxlength: 128 }),
+      inputField("new_password", "Новый пароль", { type: "password", required: true, maxlength: 128, attrs: html`minlength="8"` }),
+      inputField("new_password2", "Повторите новый пароль", { type: "password", required: true, maxlength: 128, attrs: html`minlength="8"` }),
+    ],
+  },
 };
 
 // Запись, которую редактирует форма; у новой записи её нет.
 function findEditing(kind, id) {
-  if (id == null) return undefined;
   const editor = EDITORS[kind];
+  // у форм со своим save редактируемый объект не зависит от id (профиль — всегда текущий пользователь)
+  if (editor.save) return editor.find?.();
+  if (id == null) return undefined;
   return editor.find ? editor.find(id) : findById(state[editor.bucket], id);
 }
 
 function openEditor(kind, id) {
-  if (kind !== "pet" && !state.pets.length) {
+  const editor = EDITORS[kind];
+  if (!editor.noPet && !state.pets.length) {
     toast("Сначала добавьте питомца");
     return;
   }
-  const editor = EDITORS[kind];
   const item = findEditing(kind, id);
 
   ui.editing = { kind, id };
@@ -801,8 +909,12 @@ const hasBlankRequired = (form) =>
 $("#form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  // пароли не обрезаем: пробелы по краям — тоже часть пароля
   const values = Object.fromEntries(
-    [...new FormData(form)].map(([key, value]) => [key, value.trim()]),
+    [...new FormData(form)].map(([key, value]) => [
+      key,
+      form.elements[key].type === "password" ? value : value.trim(),
+    ]),
   );
 
   if (!form.checkValidity() || hasBlankRequired(form)) {
@@ -817,12 +929,24 @@ $("#form").addEventListener("submit", async (event) => {
 
   const { kind, id } = ui.editing;
   const editor = EDITORS[kind];
+  const problem = editor.check?.(values);
+  if (problem) {
+    $("#error").textContent = problem;
+    return;
+  }
   const existing = findEditing(kind, id);
   try {
-    await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
+    if (editor.save) await editor.save(values);
+    else await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
   } catch (error) {
     console.error(error);
-    $("#error").textContent = "Не удалось сохранить. Попробуйте ещё раз.";
+    if (isUnauthorized(error)) {
+      $("#editor").close();
+      return;
+    }
+    // 400 — понятная пользователю причина от сервера (например, почта занята)
+    $("#error").textContent =
+      error.status === 400 ? error.message : "Не удалось сохранить. Попробуйте ещё раз.";
     return;
   }
   $("#editor").close();
@@ -859,6 +983,11 @@ const actions = {
     render();
   },
   export: ({ id }) => exportCalendar(id),
+  "auth-mode": ({ mode }) => setAuthMode(mode),
+  logout: async () => {
+    await auth.logout();
+    showAuth();
+  },
 };
 
 document.addEventListener("click", async (event) => {
@@ -868,7 +997,7 @@ document.addEventListener("click", async (event) => {
     await actions[target.dataset.action]?.(target.dataset);
   } catch (error) {
     console.error(error);
-    toast("Не удалось выполнить действие. Попробуйте ещё раз.");
+    if (!isUnauthorized(error)) toast("Не удалось выполнить действие. Попробуйте ещё раз.");
   }
 });
 
@@ -921,6 +1050,112 @@ function exportCalendar(id) {
   toast("Файл календаря подготовлен. Импорт выполните в вашем календаре.");
 }
 
+// ---------- Вход, регистрация и выход ----------
+
+// Пока пользователь не вошёл, вместо приложения показывается #auth
+// (body.logged-out прячет боковую панель и рабочую область).
+function showAuth() {
+  ui.user = null;
+  Object.assign(state, emptyState());
+  if ($("#editor").open) $("#editor").close();
+  document.body.classList.add("logged-out");
+  $("#auth").hidden = false;
+  setAuthMode("login");
+}
+
+// Сессия могла закончиться посреди работы: любой 401 возвращает на экран входа.
+function isUnauthorized(error) {
+  if (error.status !== 401) return false;
+  showAuth();
+  toast("Сессия закончилась. Войдите снова.");
+  return true;
+}
+
+function setAuthMode(mode) {
+  document.querySelectorAll("[data-action='auth-mode']").forEach((tab) => {
+    const isActive = tab.dataset.mode === mode;
+    tab.classList.toggle("active", isActive);
+    tab.setAttribute("aria-pressed", String(isActive));
+  });
+  document.querySelectorAll(".auth-form").forEach((form) => {
+    form.hidden = form.dataset.mode !== mode;
+    form.reset();
+    form.querySelector(".error").textContent = "";
+  });
+  $(`.auth-form[data-mode="${mode}"] input`).focus();
+}
+
+// Блок пользователя в боковой панели.
+function showAccount(user) {
+  ui.user = user;
+  const name = fullName(user) || user.username;
+  $("#account-initial").textContent = initial(name).toUpperCase();
+  $("#account-name").textContent = name;
+  $("#account-email").textContent = user.email;
+}
+
+async function startApp(user) {
+  showAccount(user);
+  $("#auth").hidden = true;
+  document.body.classList.remove("logged-out");
+  try {
+    Object.assign(state, await api.load());
+  } catch (error) {
+    console.error(error);
+    if (isUnauthorized(error)) return;
+    toast("Не удалось загрузить данные.");
+  }
+  render();
+}
+
+// Обе формы устроены одинаково: проверяем поля, отправляем, при успехе входим в приложение.
+// check возвращает текст ошибки, если значения не подходят ещё до запроса.
+function handleAuthForm(form, { send, check = () => "" }) {
+  const errorBox = form.querySelector(".error");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(form));
+    const problem =
+      !form.checkValidity() || hasBlankRequired(form)
+        ? "Заполните обязательные поля и проверьте значения."
+        : check(values);
+    if (problem) {
+      errorBox.textContent = problem;
+      form.reportValidity();
+      return;
+    }
+
+    const submit = form.querySelector("[type=submit]");
+    submit.disabled = true;
+    try {
+      await startApp(await send(values));
+    } catch (error) {
+      console.error(error);
+      // 400 — понятная пользователю причина от сервера, остальное — сбой
+      errorBox.textContent =
+        error.status === 400 ? error.message : "Сервер недоступен. Попробуйте позже.";
+    } finally {
+      submit.disabled = false;
+    }
+  });
+}
+
+handleAuthForm($("#login-form"), {
+  send: ({ login, password }) => auth.login({ login: login.trim(), password }),
+});
+
+handleAuthForm($("#register-form"), {
+  check: ({ password, password2 }) =>
+    password === password2 ? "" : "Пароли не совпадают.",
+  send: ({ username, email, phone, password }) =>
+    auth.register({
+      username: username.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      password,
+    }),
+});
+
 // ---------- Запуск ----------
 
 async function init() {
@@ -930,12 +1165,11 @@ async function init() {
     year: "numeric",
   });
   try {
-    Object.assign(state, await api.load());
+    await startApp(await auth.me());
   } catch (error) {
-    console.error(error);
-    toast("Не удалось загрузить данные.");
+    if (error.status !== 401) console.error(error);
+    showAuth();
   }
-  render();
 }
 
 window.addEventListener("hashchange", render);

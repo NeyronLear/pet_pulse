@@ -9,9 +9,14 @@ class AdminUser(admin.ModelAdmin):
     """Модель User для админки"""
 
     list_display = [
+        "username",
+        "email",
         "phone",
+        "date_joined",
     ]
     search_fields = [
+        "username",
+        "email",
         "phone",
     ]
     list_filter = [

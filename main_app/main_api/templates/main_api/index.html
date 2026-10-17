@@ -8,7 +8,57 @@
     <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
     <script defer src="{% static 'js/app.js' %}"></script>
   </head>
-  <body>
+  <body class="logged-out">
+    <section id="auth" class="auth" hidden>
+      <div class="auth-card">
+        <a class="logo"><img src="{% static 'img/logo.jpeg' %}" alt=""> PetPulse</a>
+        <p class="slogan">Профессионально. Бережно. С любовью.</p>
+        <div class="filters auth-tabs">
+          <button type="button" class="filter active" data-action="auth-mode" data-mode="login" aria-pressed="true">Вход</button>
+          <button type="button" class="filter" data-action="auth-mode" data-mode="register" aria-pressed="false">Регистрация</button>
+        </div>
+
+        <form id="login-form" class="auth-form" data-mode="login">
+          <h2>С возвращением</h2>
+          <div class="field">
+            <label for="login-login">Логин или почта *</label>
+            <input id="login-login" name="login" autocomplete="username" maxlength="254" required>
+          </div>
+          <div class="field">
+            <label for="login-password">Пароль *</label>
+            <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+          </div>
+          <p class="error" aria-live="polite"></p>
+          <button type="submit" class="button full">Войти</button>
+        </form>
+
+        <form id="register-form" class="auth-form" data-mode="register" hidden>
+          <h2>Создать аккаунт</h2>
+          <div class="field">
+            <label for="register-username">Логин *</label>
+            <input id="register-username" name="username" autocomplete="username" maxlength="150" required>
+          </div>
+          <div class="field">
+            <label for="register-email">Почта *</label>
+            <input id="register-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+          </div>
+          <div class="field">
+            <label for="register-phone">Телефон</label>
+            <input id="register-phone" name="phone" type="tel" autocomplete="tel" maxlength="20">
+          </div>
+          <div class="field">
+            <label for="register-password">Пароль *</label>
+            <input id="register-password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="field">
+            <label for="register-password2">Повторите пароль *</label>
+            <input id="register-password2" name="password2" type="password" autocomplete="new-password" minlength="8" required>
+          </div>
+          <p class="error" aria-live="polite"></p>
+          <button type="submit" class="button full">Зарегистрироваться</button>
+        </form>
+      </div>
+    </section>
     <aside>
       <a class="logo"><img src="{% static 'img/logo.jpeg' %}" alt=""> PetPulse</a>
       <p class="slogan">Профессионально. Бережно. С любовью.</p>
@@ -26,8 +76,14 @@
     </aside>
     <div class="workspace">
       <header>
-        <span>Моё пространство / <b id="section-name">Обзор</b></span>
         <time id="today"></time>
+        <div class="account">
+          <span class="avatar" id="account-initial" aria-hidden="true"></span>
+          <a class="account-body" href="#profile" title="Открыть профиль">
+            <strong id="account-name"></strong>
+            <small id="account-email"></small>
+          </a>
+        </div>
       </header>
       <main id="main"></main>
       <footer>
