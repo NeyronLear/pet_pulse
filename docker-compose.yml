@@ -1,6 +1,7 @@
 services:
   server:
-    build: .
+    # в CI/на ВМ используется готовый образ из registry; локально — собирается из исходников
+    image: ${IMAGE_NAME:-pet_pulse_1337:local}
 
     ports:
       - "8000:8000"
