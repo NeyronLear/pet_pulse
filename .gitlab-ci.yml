@@ -76,6 +76,12 @@ deploy:vm:
     # кладём на ВМ compose-файл и ключ сервис-аккаунта
     - $SSH $VM "mkdir -p ~/app"
     - $SCP ./docker-compose.yml $SPIRIT_DOCKER_SA_KEY $VM:app/
+    # .env не хранится в git — берём его из CI-переменной APP_ENV_FILE (тип File) в Spirit
+    - |
+      if [ -z "$APP_ENV_FILE" ] || [ ! -f "$APP_ENV_FILE" ]; then
+        echo "Создайте CI-переменную APP_ENV_FILE (тип File) с содержимым .env"; exit 1
+      fi
+    - $SCP $APP_ENV_FILE $VM:app/.env
     # на ВМ: входим в registry, скачиваем новый образ и перезапускаем.
     # dp и docker запускаем через sudo: dp пишет helper в /usr/local/bin, это требует root
     - |
