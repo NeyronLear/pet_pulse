@@ -16,7 +16,8 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 DEBUG = True
 
 ALLOWED_HOSTS = (
-    os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").replace(" ", "").split(",")
+    os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").replace(" ", "").split(","),
+    "http://hack-led-17-vm1-4224f9.vmaas-spirit.t-education.com"
 )
 
 
