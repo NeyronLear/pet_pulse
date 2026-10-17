@@ -75,7 +75,7 @@ deploy:vm:
   script:
     # кладём на ВМ compose-файл и ключ сервис-аккаунта
     - $SSH $VM "mkdir -p ~/app"
-    - $SCP deploy/docker-compose.yml $SPIRIT_DOCKER_SA_KEY $VM:app/
+    - $SCP ./docker-compose.yml $SPIRIT_DOCKER_SA_KEY $VM:app/
     # на ВМ: входим в registry, скачиваем новый образ и перезапускаем.
     # dp и docker запускаем через sudo: dp пишет helper в /usr/local/bin, это требует root
     - |
