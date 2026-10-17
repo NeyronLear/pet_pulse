@@ -1,0 +1,3 @@
+-r test.txt
+pylint==4.1.3
+black==26.10.1

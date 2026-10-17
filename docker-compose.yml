@@ -1,0 +1,22 @@
+services:
+  server:
+    build: .
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/user/test', timeout=2)"
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
