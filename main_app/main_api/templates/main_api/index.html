@@ -1,0 +1,54 @@
+{% load static %}
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PetPulse</title>
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
+    <script defer src="{% static 'js/app.js' %}"></script>
+  </head>
+  <body>
+    <aside>
+      <a class="logo"><img src="{% static 'img/logo.jpeg' %}" alt=""> PetPulse</a>
+      <p class="slogan">Профессионально. Бережно. С любовью.</p>
+      <nav aria-label="Основная навигация">
+        <a href="#home">Главная</a>
+        <a href="#pets">Мои питомцы</a>
+        <a href="#health">Здоровье</a>
+        <a href="#food">Питание</a>
+        <a href="#reminders">Напоминания</a>
+      </nav>
+      <div class="aside-note">
+        <strong>Маленькие шаги.<br />Большая забота.</strong>
+        <p>Всё важное о любимцах в одном спокойном месте.</p>
+      </div>
+    </aside>
+    <div class="workspace">
+      <header>
+        <span>Моё пространство / <b id="section-name">Обзор</b></span>
+        <time id="today"></time>
+      </header>
+      <main id="main"></main>
+      <footer>
+        PetPulse · С заботой о тех, кто рядом
+        <span>Забота, которую чувствует каждый хвостик</span>
+      </footer>
+    </div>
+    <dialog id="editor" aria-labelledby="dialog-title">
+      <form id="form" novalidate>
+        <div class="dialog-top">
+          <span class="eyebrow">НОВАЯ ЗАПИСЬ</span>
+          <button type="button" id="close" class="icon" aria-label="Закрыть">
+            ×
+          </button>
+        </div>
+        <h2 id="dialog-title"></h2>
+        <div id="fields"></div>
+        <p class="error" id="error" role="alert"></p>
+        <button class="button full">Сохранить</button>
+      </form>
+    </dialog>
+    <div id="toast" role="status"></div>
+  </body>
+</html>

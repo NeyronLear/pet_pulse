@@ -13,7 +13,7 @@ load_dotenv()
 SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DEBUG", "False").lower() in ("yes", "1", "true", "ok")
+DEBUG = True
 
 ALLOWED_HOSTS = (
     os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").replace(" ", "").split(",")
@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "main_api",
 ]
 
 MIDDLEWARE = [
@@ -104,3 +105,5 @@ MAILERS = {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
 }
+
+AUTH_USER_MODEL = 'main_api.User'
