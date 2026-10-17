@@ -339,6 +339,9 @@ function eventRow(item) {
     </div>`;
 }
 
+// Заглушка пустого раздела: на всех страницах одна и та же карточка во всю ширину.
+const emptyCard = (text) => html`<div class="card empty">${text}</div>`;
+
 function eventList(items) {
   return items.length
     ? items.map(eventRow)
@@ -456,13 +459,11 @@ function petsView() {
       kind: "pet",
       button: "Добавить питомца",
     })}
-    <div class="pet-grid">
-      ${
-        state.pets.length
-          ? state.pets.map(petCard)
-          : html`<div class="card empty">Здесь появятся ваши питомцы.</div>`
-      }
-    </div>`;
+    ${
+      state.pets.length
+        ? html`<div class="pet-grid">${state.pets.map(petCard)}</div>`
+        : emptyCard("Здесь появятся ваши питомцы.")
+    }`;
 }
 
 function petCard(pet) {
@@ -507,7 +508,7 @@ function healthView() {
     ${
       records.length
         ? records.map(healthRecord)
-        : html`<div class="card empty">Пока нет записей здоровья.</div>`
+        : emptyCard("Пока нет записей здоровья.")
     }`;
 }
 
@@ -571,13 +572,11 @@ function foodView() {
       button: "Добавить корм",
     })}
     <div class="filters">${FOOD_FILTERS.map(foodFilterButton)}</div>
-    <div class="food-grid">
-      ${
-        items.length
-          ? items.map(foodCard)
-          : html`<div class="card empty">${emptyText}</div>`
-      }
-    </div>`;
+    ${
+      items.length
+        ? html`<div class="food-grid">${items.map(foodCard)}</div>`
+        : emptyCard(emptyText)
+    }`;
 }
 
 function foodFilterButton(value) {
@@ -609,13 +608,11 @@ function remindersView() {
       button: "Добавить напоминание",
     })}
     <div class="notice">Локальная демонстрация: системные push-уведомления не отправляются. Напоминания доступны здесь.</div>
-    <section class="card">
-      ${
-        items.length
-          ? items.map(reminderItem)
-          : html`<div class="empty">Пока нет напоминаний</div>`
-      }
-    </section>`;
+    ${
+      items.length
+        ? html`<section class="card">${items.map(reminderItem)}</section>`
+        : emptyCard("Пока нет напоминаний.")
+    }`;
 }
 
 function reminderItem(item) {
@@ -706,6 +703,8 @@ const PAGES = {
 // location.hash начинается с «#», поэтому первый символ отбрасываем.
 function currentPage() {
   const name = location.hash.slice(1);
+  // Профиль есть только у вошедшего пользователя
+  if (name === "profile" && !ui.user) return "home";
   return Object.hasOwn(PAGES, name) ? name : "home";
 }
 
@@ -984,11 +983,35 @@ const actions = {
   },
   export: ({ id }) => exportCalendar(id),
   "auth-mode": ({ mode }) => setAuthMode(mode),
+  "auth-close": () => hideAuth(),
   logout: async () => {
     await auth.logout();
-    showAuth();
+    showGuest();
   },
 };
+
+// Гость может смотреть сайт: переходить по страницам, листать дни и фильтры.
+// Всё, что меняет данные, и профиль вместо действия предлагают зарегистрироваться.
+// Перехват в фазе capture срабатывает раньше остальных обработчиков кликов.
+const GUEST_ACTIONS = new Set(["select-day", "filter-food"]);
+
+function allowedForGuest(element) {
+  if (element.matches("a[href^='#']")) return element.hash !== "#profile";
+  return GUEST_ACTIONS.has(element.dataset.action);
+}
+
+document.addEventListener(
+  "click",
+  (event) => {
+    if (ui.user || event.target.closest("#auth")) return;
+    const target = event.target.closest("a, button");
+    if (!target || allowedForGuest(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showAuth("register");
+  },
+  true,
+);
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
@@ -1052,21 +1075,38 @@ function exportCalendar(id) {
 
 // ---------- Вход, регистрация и выход ----------
 
-// Пока пользователь не вошёл, вместо приложения показывается #auth
-// (body.logged-out прячет боковую панель и рабочую область).
-function showAuth() {
+// Сайт всегда открывается с главной: адрес страницы в hash сбрасываем.
+function goHome() {
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+// Гость видит сайт с пустыми данными; войти или зарегистрироваться
+// ему предлагает окно #auth поверх страницы.
+function showGuest() {
   ui.user = null;
   Object.assign(state, emptyState());
   if ($("#editor").open) $("#editor").close();
-  document.body.classList.add("logged-out");
-  $("#auth").hidden = false;
-  setAuthMode("login");
+  $("#account-initial").textContent = "?";
+  $("#account-name").textContent = "Гость";
+  $("#account-email").textContent = "Войдите или зарегистрируйтесь";
+  goHome();
+  render();
 }
 
-// Сессия могла закончиться посреди работы: любой 401 возвращает на экран входа.
+function showAuth(mode = "login") {
+  $("#auth").hidden = false;
+  setAuthMode(mode);
+}
+
+function hideAuth() {
+  $("#auth").hidden = true;
+}
+
+// Сессия могла закончиться посреди работы: любой 401 возвращает на главную с окном входа.
 function isUnauthorized(error) {
   if (error.status !== 401) return false;
-  showAuth();
+  showGuest();
+  showAuth("login");
   toast("Сессия закончилась. Войдите снова.");
   return true;
 }
@@ -1096,8 +1136,7 @@ function showAccount(user) {
 
 async function startApp(user) {
   showAccount(user);
-  $("#auth").hidden = true;
-  document.body.classList.remove("logged-out");
+  hideAuth();
   try {
     Object.assign(state, await api.load());
   } catch (error) {
@@ -1164,13 +1203,20 @@ async function init() {
     month: "long",
     year: "numeric",
   });
+  goHome();
   try {
     await startApp(await auth.me());
   } catch (error) {
     if (error.status !== 401) console.error(error);
-    showAuth();
+    showGuest();
   }
 }
 
 window.addEventListener("hashchange", render);
+$("#auth").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) hideAuth();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#auth").hidden) hideAuth();
+});
 init();

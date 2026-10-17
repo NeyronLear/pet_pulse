@@ -471,6 +471,12 @@ p {
   color: var(--muted);
   font-size: 13px;
 }
+/* заглушки пустых разделов одного размера на всех страницах */
+.card.empty {
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+}
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -788,29 +794,35 @@ textarea {
 }
 /* ---------- Вход и регистрация ---------- */
 
-/* пока пользователь не вошёл, приложение скрыто и виден только #auth */
-body.logged-out aside,
-body.logged-out .workspace {
-  display: none;
-}
+/* гость видит главную страницу, а вход и регистрация открываются поверх неё */
 .auth {
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow-y: auto;
   display: grid;
   place-items: center;
   padding: 40px 16px;
-  background: var(--paper);
+  background: #1f3c3555;
+  backdrop-filter: blur(3px);
 }
 .auth[hidden],
 .auth-form[hidden] {
   display: none;
 }
 .auth-card {
+  position: relative;
   width: 100%;
   max-width: 420px;
   background: white;
   border: 1px solid var(--line);
   border-radius: 28px;
   padding: 32px 28px;
+}
+.auth-close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
 }
 .auth-card .slogan {
   margin-bottom: 26px;

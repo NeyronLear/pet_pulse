@@ -8,9 +8,10 @@
     <link rel="stylesheet" href="{% static 'css/styles.css' %}" />
     <script defer src="{% static 'js/app.js' %}"></script>
   </head>
-  <body class="logged-out">
+  <body>
     <section id="auth" class="auth" hidden>
       <div class="auth-card">
+        <button type="button" class="icon auth-close" data-action="auth-close" aria-label="Закрыть окно" title="Закрыть">×</button>
         <a class="logo"><img src="{% static 'img/logo.jpeg' %}" alt=""> PetPulse</a>
         <p class="slogan">Профессионально. Бережно. С любовью.</p>
         <div class="filters auth-tabs">
