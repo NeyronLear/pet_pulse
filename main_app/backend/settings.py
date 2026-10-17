@@ -13,7 +13,7 @@ load_dotenv()
 SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get("DEBUG", True)
+DEBUG = os.environ.get("DEBUG", 'true').lower() in ['true', '1', 'yes']
 
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").replace(" ", "").split(",")
 
