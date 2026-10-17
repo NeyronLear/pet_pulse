@@ -36,19 +36,37 @@
       </footer>
     </div>
     <dialog id="editor" aria-labelledby="dialog-title">
-      <form id="form" novalidate>
-        <div class="dialog-top">
-          <span class="eyebrow">НОВАЯ ЗАПИСЬ</span>
-          <button type="button" id="close" class="icon" aria-label="Закрыть">
-            ×
-          </button>
-        </div>
-        <h2 id="dialog-title"></h2>
-        <div id="fields"></div>
-        <p class="error" id="error" role="alert"></p>
-        <button class="button full">Сохранить</button>
-      </form>
-    </dialog>
+  <div class="dialog-top">
+    <div class="dialog-heading">
+      <span class="dialog-kicker">PETCARE</span>
+      <h2 id="dialog-title">Новая запись</h2>
+    </div>
+
+    <button
+      id="close"
+      type="button"
+      class="icon"
+      aria-label="Закрыть окно"
+      title="Закрыть"
+    >×</button>
+  </div>
+
+  <form id="form">
+    <div id="fields"></div>
+
+    <p id="error" class="error" aria-live="polite"></p>
+
+    <div class="dialog-foot">
+      <button id="cancel" type="button" class="button light">
+        Отмена
+      </button>
+
+      <button type="submit" class="button">
+        Сохранить
+      </button>
+    </div>
+  </form>
+</dialog>
     <div id="toast" role="status"></div>
   </body>
 </html>

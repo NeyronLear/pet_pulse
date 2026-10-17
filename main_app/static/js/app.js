@@ -338,7 +338,7 @@ function homeView() {
       title: "Хороший день для заботы",
       note: "Всё важное о ваших любимцах под рукой.",
       kind: "event",
-      button: "Добавить событие",
+      button: "Добавить напоминание",
     })}
     <div class="dashboard">
       ${weekCard()}
@@ -410,7 +410,7 @@ function homePetsCard() {
     <section class="card">
       <div class="section-head">
         <h2>Мои питомцы</h2>
-        <button class="link" data-action="add" data-kind="pet">+ Добавить</button>
+        <button class="button light" data-action="add" data-kind="pet">+ Добавить</button>
       </div>
       ${
         state.pets.length
@@ -517,7 +517,7 @@ function medCard(pet) {
           : html`<p>Медкарта ещё не заполнена.</p>`
       }
       <div class="actions">
-        <button class="link" data-action="edit" data-kind="medcard" data-id="${pet.id}">${card ? "Изменить" : "Заполнить"}</button>
+        <button class="button" data-action="edit" data-kind="medcard" data-id="${pet.id}">${card ? "Изменить" : "Заполнить"}</button>
       </div>
     </article>`;
 }
@@ -532,7 +532,7 @@ function healthRecord(record) {
       <h2>${record.title}</h2>
       <p>${record.note}</p>
       <div class="actions">
-        <button class="link danger" data-action="delete" data-bucket="history" data-id="${record.id}">Удалить запись</button>
+        <button class="button-danger" data-action="delete" data-bucket="history" data-id="${record.id}">Удалить запись</button>
       </div>
     </article>`;
 }
@@ -577,7 +577,7 @@ function foodCard(item) {
       <p>${item.note}</p>
       <div class="section-head">
         <span class="badge ${item.status !== "Подошло" && "warn"}">${item.status}</span>
-        <button class="link danger" data-action="delete" data-bucket="food" data-id="${item.id}">Удалить</button>
+        <button class="button-danger" data-action="delete" data-bucket="food" data-id="${item.id}">Удалить</button>
       </div>
     </article>`;
 }
@@ -591,7 +591,7 @@ function remindersView() {
       title: "Важное не потеряется",
       note: "Процедуры и маленькие дела на каждый день.",
       kind: "event",
-      button: "Добавить событие",
+      button: "Добавить напоминание",
     })}
     <div class="notice">Локальная демонстрация: системные push-уведомления не отправляются. Напоминания доступны здесь.</div>
     <section class="card">
@@ -610,8 +610,8 @@ function reminderItem(item) {
       <p class="day-label">${formatDate(item.date)}${isOverdue && " · ПРОСРОЧЕНО"}</p>
       ${eventRow(item)}
       <div class="actions">
-        <button class="link" data-action="export" data-id="${item.id}">В календарь</button>
-        <button class="link danger" data-action="delete" data-bucket="history" data-id="${item.id}">Удалить</button>
+        <button class="button" data-action="export" data-id="${item.id}">В календарь</button>
+        <button class="button-danger" data-action="delete" data-bucket="history" data-id="${item.id}">Удалить</button>
       </div>
     </div>`;
 }

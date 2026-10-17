@@ -344,22 +344,9 @@ p {
   background: var(--yellow);
   color: #8c773a;
 }
-.check {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
-  border: 1px solid var(--line);
-  border-radius: 50%;
-  background: white;
-  color: var(--green);
-}
 .event.done strong {
   text-decoration: line-through;
   color: var(--muted);
-}
-.event.done .check {
-  background: var(--green);
-  color: white;
 }
 .mini-pet {
   display: flex;
@@ -496,8 +483,18 @@ p {
   justify-content: flex-end;
   gap: 8px;
 }
-.danger {
+.button-danger {
   color: #a33b35;
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 23px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 13px;
+  background: white;
 }
 .card h2,
 .mini-pet strong,
@@ -701,4 +698,99 @@ textarea {
     transition: none !important;
     animation: none !important;
   }
+}
+.event .check {
+    grid-column: 4;
+    grid-row: 1 / span 2;
+    width: 34px;
+    height: 34px;
+    align-self: center;
+}
+
+.event .check {
+  width: 38px;
+  height: 38px;
+}
+
+@keyframes check-pop {
+  50% {
+    transform: scale(1.15);
+  }
+}
+
+.check {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: transparent;
+}
+/* отключаем общий «прыжок» кнопок */
+.check:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+.check:disabled {
+  cursor: progress;
+}
+.check::before {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  border: 2px solid #b9cfc5;
+  background: white;
+  transition:
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
+}
+.check::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 11px;
+  border: solid white;
+  border-width: 0 2.5px 2.5px 0;
+  transform: translate(-50%, -62%) rotate(45deg) scale(0);
+  transition: transform 180ms ease;
+}
+@media (hover: hover) {
+  .check:hover::before {
+    border-color: var(--green);
+    background: var(--mint);
+  }
+  .check:hover::after {
+    border-color: var(--green);
+    transform: translate(-50%, -62%) rotate(45deg) scale(0.8);
+  }
+}
+.check:active::before {
+  transform: scale(0.88);
+}
+/* отмечено */
+.check[aria-pressed="true"]::before,
+.event.done .check::before {
+  background: var(--green);
+  border-color: var(--green);
+  animation: check-pop 260ms ease;
+}
+.check[aria-pressed="true"]::after,
+.event.done .check::after {
+  border-color: white;
+  transform: translate(-50%, -62%) rotate(45deg) scale(1);
+}
+/* фокус с клавиатуры — мягкое кольцо вокруг кружка, а не квадрат */
+.check:focus-visible {
+  outline: none;
+}
+.check:focus-visible::before {
+  box-shadow: 0 0 0 4px rgb(37 138 103 / 25%);
 }

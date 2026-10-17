@@ -2,6 +2,7 @@
 
 import json
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -69,6 +70,15 @@ def _owner(request: HttpRequest):
         return request.user
     user, _ = get_user_model().objects.get_or_create(username="demo")
     return user
+
+
+def _negative_weight(weight) -> bool:
+    """Модель не запрещает отрицательный вес, поэтому проверяем здесь.
+    Нечисловое значение отсеет full_clean()."""
+    try:
+        return weight not in ("", None) and Decimal(str(weight)) < 0
+    except InvalidOperation:
+        return False
 
 
 def _save(instance):
@@ -260,7 +270,7 @@ class HistoryView(View):
     def delete(self, request: HttpRequest, pet_id: int):
         get_object_or_404(Pet, pk=pet_id)
         record_id = request.GET.get("id")
-        if not record_id:
+        if not record_id or not record_id.isdigit():
             return bad_request("Не передан id записи.")
         record = get_object_or_404(History, pk=record_id, pet_id=pet_id)
         record.delete()
@@ -292,6 +302,8 @@ class MedcardView(View):
             return bad_request("Медкарта уже существует, используйте обновление.")
 
         weight = data.get("weight")
+        if _negative_weight(weight):
+            return bad_request("Вес не может быть отрицательным.")
         card = MedCard(
             pet=pet,
             weight=weight if weight not in ("", None) else None,
@@ -310,7 +322,9 @@ class MedcardView(View):
 
         card = get_object_or_404(MedCard, pk=data.get("id"), pet_id=pet_id)
         weight = data.get("weight")
-        card.weight = weight if weight not in ("", None) else None
+        if _negative_weight(weight):
+            return bad_request("Вес не может быть отрицательным.")
+        card.weight =weight if weight not in ("", None) else None
         card.allergies = data.get("allergies") or ""
         card.chronic_conditions = data.get("chronic_conditions") or ""
         card.notes = data.get("notes") or ""
@@ -324,7 +338,7 @@ class MedcardView(View):
     def delete(self, request: HttpRequest, pet_id: int):
         get_object_or_404(Pet, pk=pet_id)
         card_id = request.GET.get("id")
-        if not card_id:
+        if not card_id or not card_id.isdigit():
             return bad_request("Не передан id записи.")
         card = get_object_or_404(MedCard, pk=card_id, pet_id=pet_id)
         card.delete()
@@ -393,7 +407,7 @@ class FoodView(View):
     def delete(self, request: HttpRequest, pet_id: int):
         get_object_or_404(Pet, pk=pet_id)
         item_id = request.GET.get("id")
-        if not item_id:
+        if not item_id or not item_id.isdigit():
             return bad_request("Не передан id записи.")
         item = get_object_or_404(Food, pk=item_id, pet_id=pet_id)
         item.delete()
