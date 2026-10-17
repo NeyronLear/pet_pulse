@@ -15,9 +15,7 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = (
-    os.environ.get("ALLOWED_HOSTS", "localhost,127.0.0.1").replace(" ", "").split(",")
-)
+ALLOWED_HOSTS = ["188.124.39.173"]
 
 
 INSTALLED_APPS = [
@@ -106,4 +104,4 @@ MAILERS = {
     },
 }
 
-AUTH_USER_MODEL = 'main_api.User'
+AUTH_USER_MODEL = "main_api.User"

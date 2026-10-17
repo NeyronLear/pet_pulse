@@ -37,7 +37,6 @@ class AdminPet(admin.ModelAdmin):
     search_fields = ["owner", "name", "species", "breed"]
     list_filter = [
         "owner",
-        "name",
         "species",
         "breed",
         "birth_date",
@@ -61,7 +60,7 @@ class AdminMedcard(admin.ModelAdmin):
         "updated_at",
     ]
     search_fields = ["pet", "allergies", "chronic_conditions"]
-    list_filter = ["pet", "weight", "allergies", "chronic_conditions", "updated_at"]
+    list_filter = ["pet", "allergies", "chronic_conditions", "updated_at"]
 
     class Meta:
         model = MedCard
@@ -81,7 +80,7 @@ class AdminFood(admin.ModelAdmin):
         "created_at",
     ]
     search_fields = ["pet", "name", "preference", "status", "reaction"]
-    list_filter = ["pet", "preference", "status", "reaction", "date", "preference"]
+    list_filter = ["pet", "preference", "status", "date"]
 
     class Meta:
         model = Food
@@ -103,7 +102,7 @@ class AdminHistory(admin.ModelAdmin):
         "created_at",
     ]
     search_fields = ["pet", "type", "title", "note", "created_at"]
-    list_filter = ["pet", "type", "created_at", "date", "time", "next_date", "done"]
+    list_filter = ["pet", "type", "created_at", "date", "next_date", "done"]
 
     class Meta:
         model = History
@@ -114,3 +113,5 @@ admin.site.register(Pet, AdminPet)
 admin.site.register(MedCard, AdminMedcard)
 admin.site.register(Food, AdminFood)
 admin.site.register(History, AdminHistory)
+
+admin.site.site_url = "http://127.0.0.1:8000/user"
