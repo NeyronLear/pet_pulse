@@ -348,6 +348,20 @@ p {
   text-decoration: line-through;
   color: var(--muted);
 }
+/* плавное исчезновение после отметки; длительность синхронна с FADE_OUT_MS в app.js */
+.leaving {
+  max-height: 0 !important;
+  opacity: 0;
+  overflow: hidden;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-top-width: 0 !important;
+  transition:
+    opacity 250ms ease,
+    max-height 400ms ease,
+    padding 400ms ease,
+    border-width 400ms ease;
+}
 .mini-pet {
   display: flex;
   gap: 13px;
@@ -780,7 +794,7 @@ textarea {
 .event.done .check::before {
   background: var(--green);
   border-color: var(--green);
-  animation: check-pop 260ms ease;
+  animation: check-pop 450ms ease;
 }
 .check[aria-pressed="true"]::after,
 .event.done .check::after {

@@ -15,4 +15,6 @@ EXPOSE 8000
 
 WORKDIR /app/main_app
 
+RUN python3 manage.py collectstatic --noinput
+
 CMD ["sh", "-c", "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"]

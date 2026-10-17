@@ -353,7 +353,7 @@ function homeView() {
     <div class="lower">
       <section class="card">
         <div class="section-head">
-          <h2>Здоровье под присмотром</h2>
+          <h2>Здоровье</h2>
           <a class="link" href="#health">История →</a>
         </div>
         <div class="metric">${state.health.length}</div>
@@ -361,7 +361,7 @@ function homeView() {
       </section>
       <section class="card">
         <div class="section-head">
-          <h2>Питание и привычки</h2>
+          <h2>Питание</h2>
           <a href="#food" class="link">Дневник →</a>
         </div>
         <div class="metric">${state.food.filter((item) => item.status === "Подошло").length} / ${state.food.length}</div>
@@ -593,8 +593,6 @@ function remindersView() {
       kind: "event",
       button: "Добавить напоминание",
     })}
-    <div class="notice">Локальная демонстрация: системные push-уведомления не отправляются. Напоминания доступны здесь.</div>
-    <section class="card">
       ${
         items.length
           ? items.map(reminderItem)
@@ -606,7 +604,7 @@ function remindersView() {
 function reminderItem(item) {
   const isOverdue = item.date < todayKey() && !item.done;
   return html`
-    <div>
+    <div class="reminder">
       <p class="day-label">${formatDate(item.date)}${isOverdue && " · ПРОСРОЧЕНО"}</p>
       ${eventRow(item)}
       <div class="actions">
@@ -830,11 +828,29 @@ $("#form").addEventListener("submit", async (event) => {
   toast("Сохранено");
 });
 
-$("#close").addEventListener("click", () => $("#editor").close());
+// «×» и «Отмена» просто закрывают окно, ничего не сохраняя.
+["#close", "#cancel"].forEach((selector) =>
+  $(selector).addEventListener("click", () => $("#editor").close()),
+);
 
 // ---------- Действия по клику ----------
 
-// Кнопка в разметке: data-action="<имя>" и параметры в data-* (приходят в dataset).
+// Сколько строка с отмеченным напоминанием остаётся на экране, пока играет анимация.
+const DONE_ANIMATION_MS = 500;
+const FADE_OUT_MS = 400; // должно совпадать с transition у .leaving в styles.css
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Плавно скрывает элемент: растворяет и схлопывает по высоте.
+// max-height нужно задать числом заранее, иначе переход от auto не анимируется.
+function fadeOut(element) {
+  element.style.maxHeight = `${element.offsetHeight}px`;
+  element.getBoundingClientRect(); // фиксируем стартовое состояние перед сменой класса
+  element.classList.add("leaving");
+  return delay(FADE_OUT_MS);
+}
+
+// Кнопка в разметке: data-action="<имя>" и параметры в data-* (приходят в dataset),
+// вторым аргументом приходит сама кнопка.
 const actions = {
   add: ({ kind }) => openEditor(kind),
   edit: ({ kind, id }) => openEditor(kind, id),
@@ -846,12 +862,31 @@ const actions = {
     ui.foodFilter = filter;
     render();
   },
-  "toggle-done": async ({ id }) => {
+  "toggle-done": async ({ id }, button) => {
     const item = findById(state.history, id);
     if (!item) return;
-    const saved = await saveItem("history", { ...item, done: !item.done });
-    render();
-    if (saved.done) toast("Выполнено. Запись перенесена в «Здоровье»");
+    // Выполненная запись пропадает из списка напоминаний при перерисовке,
+    // поэтому сначала показываем анимацию отметки и только потом рендерим.
+    const row = button.closest(".event");
+    if (!item.done) {
+      row?.classList.add("done");
+      button.setAttribute("aria-pressed", "true");
+    }
+    button.disabled = true;
+    try {
+      const [saved] = await Promise.all([
+        saveItem("history", { ...item, done: !item.done }),
+        item.done ? null : delay(DONE_ANIMATION_MS),
+      ]);
+      if (saved.done && row) await fadeOut(row.closest(".reminder") ?? row);
+      render();
+      if (saved.done) toast("Выполнено. Запись перенесена в «Здоровье»");
+    } catch (error) {
+      row?.classList.toggle("done", item.done);
+      button.removeAttribute("aria-pressed");
+      button.disabled = false;
+      throw error;
+    }
   },
   delete: async ({ bucket, id }) => {
     if (!confirm("Удалить запись?")) return;
@@ -865,7 +900,7 @@ document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
   try {
-    await actions[target.dataset.action]?.(target.dataset);
+    await actions[target.dataset.action]?.(target.dataset, target);
   } catch (error) {
     console.error(error);
     toast("Не удалось выполнить действие. Попробуйте ещё раз.");
