@@ -11,6 +11,7 @@ from .views import (
     MedcardView,
     MeView,
     PasswordView,
+    PetPhotoView,
     RegisterView,
     TamagochiView,
     test,
@@ -19,6 +20,7 @@ from .views import (
 
 urlpatterns = [
     path("", MainView.as_view(), name="main"),
+    path("pet_photo/<int:pet_id>", PetPhotoView.as_view(), name="pet_photo_point"),
     path("history/<int:pet_id>", HistoryView.as_view(), name="history_point"),
     path("med_card/<int:pet_id>", MedcardView.as_view(), name="med_card_point"),
     path("food/<int:pet_id>", FoodView.as_view(), name="food_point"),

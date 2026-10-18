@@ -11,6 +11,7 @@ from django.contrib.auth import (
     logout,
     update_session_auth_hash,
 )
+from django import forms
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -127,6 +128,7 @@ def pet_to_json(pet: Pet) -> dict:
         "species": pet.species,
         "breed": pet.breed,
         "birth_date": _iso(pet.birth_date),
+        "photo": pet.photo.url if pet.photo else None,
     }
 
 
@@ -238,6 +240,50 @@ class MainView(View):
         except ValueError:
             return bad_request("Неверный формат даты.")
         return _save(pet) or JsonResponse(pet_to_json(pet))
+
+
+# ---------- Фото питомца (/pet_photo/<pet_id>) ----------
+
+PHOTO_MAX_SIZE = 5 * 1024 * 1024
+
+
+class PetPhotoForm(forms.Form):
+    """ImageField через Pillow проверяет, что файл — действительно картинка."""
+    photo = forms.ImageField(
+        error_messages={
+            "required": "Выберите фото.",
+            "invalid_image": "Файл не похож на изображение.",
+        },
+    )
+
+    def clean_photo(self):
+        photo = self.cleaned_data["photo"]
+        if photo.size > PHOTO_MAX_SIZE:
+            raise ValidationError("Фото должно быть не больше 5 МБ.")
+        return photo
+
+
+class PetPhotoView(LoginRequiredJsonMixin, View):
+    """POST (multipart/form-data, поле photo) ставит или заменяет фото, DELETE убирает его.
+    Оба отвечают питомцем целиком, как MainView."""
+
+    def post(self, request: HttpRequest, pet_id: int):
+        pet = _pet(request, pet_id)
+        form = PetPhotoForm(files=request.FILES)
+        if not form.is_valid():
+            return bad_request("; ".join(form.errors["photo"]))
+        # старый файл удаляем, чтобы в media не копились фото, на которые никто не ссылается
+        pet.photo.delete(save=False)
+        pet.photo = form.cleaned_data["photo"]
+        pet.save(update_fields=["photo", "updated_at"])
+        return JsonResponse(pet_to_json(pet))
+
+    def delete(self, request: HttpRequest, pet_id: int):
+        pet = _pet(request, pet_id)
+        pet.photo.delete(save=False)
+        pet.photo = None
+        pet.save(update_fields=["photo", "updated_at"])
+        return JsonResponse(pet_to_json(pet))
 
 
 # ---------- Регистрация, вход и выход (/auth/...) ----------

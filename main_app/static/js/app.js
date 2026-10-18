@@ -100,16 +100,19 @@ const csrfToken = () =>
     .find((row) => row.startsWith("csrftoken="))
     ?.split("=")[1] ?? "";
 
+// body — объект (уходит как JSON) или FormData с файлами (Content-Type с границей
+// частей multipart браузер проставит сам).
 async function request(method, path, body) {
+  const isForm = body instanceof FormData;
   const response = await fetch(API_ROOT + path, {
     method,
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
-      ...(body !== undefined && { "Content-Type": "application/json" }),
+      ...(body !== undefined && !isForm && { "Content-Type": "application/json" }),
       ...(method !== "GET" && { "X-CSRFToken": csrfToken() }),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined || isForm ? body : JSON.stringify(body),
   });
   if (!response.ok) {
     // Ошибки вьюх приходят как {"detail": "..."} — этот текст можно показать пользователю.
@@ -139,6 +142,7 @@ const RESOURCES = {
       species: row.species,
       breed: row.breed,
       birth: row.birth_date ?? "",
+      photo: row.photo ?? "", // адрес картинки; меняется только через api.savePhoto/removePhoto
     }),
     toServer: (pet) => ({
       id: pet.id,
@@ -265,6 +269,16 @@ const api = {
     );
     return resource.fromServer(saved);
   },
+  // Фото загружается отдельным запросом: JSON файлы не передаёт.
+  // Сервер отвечает питомцем целиком, как при обычном сохранении.
+  async savePhoto(petId, file) {
+    const body = new FormData();
+    body.append("photo", file);
+    return RESOURCES.pets.fromServer(await request("POST", `/pet_photo/${petId}`, body));
+  },
+  async removePhoto(petId) {
+    return RESOURCES.pets.fromServer(await request("DELETE", `/pet_photo/${petId}`));
+  },
   // id удаляемой записи уходит в query-параметре: DELETE /user/history/<pet_id>?id=<id>
   async remove(bucket, item) {
     const path = RESOURCES[bucket].path(item.pet);
@@ -290,11 +304,16 @@ const tamagochi = {
   remove: () => request("DELETE", "/tamagochi"),
 };
 
-async function saveItem(bucket, item) {
-  const saved = await api.save(bucket, item);
+// Кладёт сохранённую запись в state: новую добавляет, существующую заменяет.
+function replaceItem(bucket, saved) {
   const index = state[bucket].findIndex((x) => sameId(x.id, saved.id));
   if (index < 0) state[bucket].push(saved);
   else state[bucket][index] = saved;
+}
+
+async function saveItem(bucket, item) {
+  const saved = await api.save(bucket, item);
+  replaceItem(bucket, saved);
   return saved;
 }
 
@@ -339,7 +358,7 @@ function eventRow(item) {
       <span class="symbol ${isMedicine && "yellow"}" aria-hidden="true">${isMedicine ? "◒" : "+"}</span>
       <div class="event-body">
         <strong>${item.title}</strong>
-        <small>${petName(item.pet)} · ${item.type}</small>
+        <small>${petTag(item.pet)} · ${item.type}</small>
       </div>
       <small>${item.time || "Весь день"}</small>
       <button class="check" data-action="toggle-done" data-id="${item.id}"
@@ -446,10 +465,22 @@ function homePetsCard() {
     </section>`;
 }
 
+// Фото питомца, а если его нет — первая буква имени. size — доп. класс размера, например "small".
+const petAvatar = (pet, size = "") => html`
+  <span class="avatar ${size}">${pet.photo ? html`<img src="${pet.photo}" alt="">` : initial(pet.name)}</span>`;
+
+// Подпись «аватарка + имя» для записей, которые относятся к питомцу.
+function petTag(id) {
+  const pet = findById(state.pets, id);
+  return pet
+    ? html`<span class="pet-tag">${petAvatar(pet, "small")}${pet.name}</span>`
+    : petName(id);
+}
+
 function miniPet(pet) {
   return html`
     <a class="mini-pet" href="#pets">
-      <span class="avatar">${initial(pet.name)}</span>
+      ${petAvatar(pet)}
       <div>
         <strong>${pet.name}</strong>
         <p>${pet.species} · ${pet.breed || "Порода не указана"}</p>
@@ -480,7 +511,7 @@ function petCard(pet) {
   );
   return html`
     <article class="card pet-card">
-      <div class="avatar">${initial(pet.name)}</div>
+      ${petAvatar(pet)}
       <h2>${pet.name}</h2>
       <p class="muted">${pet.species} · ${pet.breed || "Без указанной породы"}</p>
       <dl>
@@ -530,7 +561,10 @@ function medCard(pet) {
   return html`
     <article class="card record">
       <span class="eyebrow">МЕДКАРТА</span>
-      <h2>${pet.name}</h2>
+      <div class="pet-title">
+        ${petAvatar(pet)}
+        <h2>${pet.name}</h2>
+      </div>
       ${
         card
           ? html`
@@ -550,7 +584,7 @@ function healthRecord(record) {
   return html`
     <article class="card record">
       <div class="section-head">
-        <span class="eyebrow">${petName(record.pet)} · ${record.type}</span>
+        <span class="eyebrow">${petTag(record.pet)} · ${record.type}</span>
         <span class="muted">${formatDate(record.date)}</span>
       </div>
       <h2>${record.title}</h2>
@@ -594,7 +628,7 @@ function foodFilterButton(value) {
 function foodCard(item) {
   return html`
     <article class="card record">
-      <span class="eyebrow">${petName(item.pet)}</span>
+      <span class="eyebrow">${petTag(item.pet)}</span>
       <h2>${item.title}</h2>
       <p>${item.note}</p>
       <div class="section-head">
@@ -797,6 +831,20 @@ const textareaField = (name, label, value = "") => html`
   </div>`;
 const noteField = () => textareaField("note", "Наблюдения и заметки");
 
+// Ограничение сервера (PHOTO_MAX_SIZE во views.py) проверяем заранее, чтобы не гонять большой файл зря.
+const PHOTO_MAX_SIZE = 5 * 1024 * 1024;
+
+const photoField = (pet) => html`
+  <div class="field">
+    <label for="field-photo">${pet.photo ? "Заменить фото" : "Фото"}</label>
+    ${pet.photo && html`<img class="photo-preview" src="${pet.photo}" alt="Текущее фото">`}
+    <input id="field-photo" name="photo" type="file" accept="image/*">
+    ${pet.photo && html`
+      <label class="checkbox">
+        <input type="checkbox" name="remove_photo"> Удалить фото
+      </label>`}
+  </div>`;
+
 // Варианты поля «Тип» — это History.TYPE_CHOICES из models.py, значение уходит в БД как есть.
 const HISTORY_TYPES = [
   ["Вакцинация", "Вакцинация"],
@@ -813,7 +861,8 @@ const HISTORY_TYPES = [
 //   find     — как искать редактируемую запись, если не по её id
 //   save     — своё сохранение вместо saveItem (для форм, не связанных с питомцами)
 //   noPet    — форму можно открыть, даже если питомцев ещё нет
-//   check    — проверка значений до отправки, возвращает текст ошибки
+//   check    — проверка значений до отправки (values, form), возвращает текст ошибки
+//   afterSave — что сделать с сохранённой записью (например, загрузить фото), возвращает её новую версию
 //   title, fields — заголовок и набор полей; item — редактируемая запись, если она есть
 const EDITORS = {
   pet: {
@@ -834,7 +883,20 @@ const EDITORS = {
       ),
       inputField("breed", "Порода", { value: item.breed }),
       inputField("birth", "Дата рождения", { type: "date", value: item.birth }),
+      photoField(item),
     ],
+    check: (values, form) => {
+      const file = form.elements.photo.files[0];
+      if (file && !file.type.startsWith("image/")) return "Выберите файл с картинкой.";
+      if (file?.size > PHOTO_MAX_SIZE) return "Фото должно быть не больше 5 МБ.";
+      return "";
+    },
+    afterSave: async (pet, form) => {
+      const file = form.elements.photo.files[0];
+      if (file) return api.savePhoto(pet.id, file);
+      if (form.elements.remove_photo?.checked) return api.removePhoto(pet.id);
+      return pet;
+    },
   },
   // Напоминание и запись здоровья — одна модель History, разница в поле done:
   // напоминание ещё не выполнено, запись здоровья — уже выполнена.
@@ -950,12 +1012,15 @@ const hasBlankRequired = (form) =>
 $("#form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  // пароли не обрезаем: пробелы по краям — тоже часть пароля
+  // пароли не обрезаем: пробелы по краям — тоже часть пароля.
+  // Файлы и флажки в values не попадают: их читает из формы afterSave.
   const values = Object.fromEntries(
-    [...new FormData(form)].map(([key, value]) => [
-      key,
-      form.elements[key].type === "password" ? value : value.trim(),
-    ]),
+    [...new FormData(form)]
+      .filter(([key]) => !["file", "checkbox"].includes(form.elements[key].type))
+      .map(([key, value]) => [
+        key,
+        form.elements[key].type === "password" ? value : value.trim(),
+      ]),
   );
 
   if (!form.checkValidity() || hasBlankRequired(form)) {
@@ -970,7 +1035,7 @@ $("#form").addEventListener("submit", async (event) => {
 
   const { kind, id } = ui.editing;
   const editor = EDITORS[kind];
-  const problem = editor.check?.(values);
+  const problem = editor.check?.(values, form);
   if (problem) {
     $("#error").textContent = problem;
     return;
@@ -978,7 +1043,12 @@ $("#form").addEventListener("submit", async (event) => {
   const existing = findEditing(kind, id);
   try {
     if (editor.save) await editor.save(values);
-    else await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
+    else {
+      const saved = await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
+      // Запись уже на сервере: если afterSave упадёт, повторное «Сохранить» её обновит, а не создаст заново
+      ui.editing.id = saved.id;
+      if (editor.afterSave) replaceItem(editor.bucket, await editor.afterSave(saved, form));
+    }
   } catch (error) {
     console.error(error);
     if (isUnauthorized(error)) {

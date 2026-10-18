@@ -5,14 +5,17 @@
 Accept: application/json, id записи в теле PUT и в ?id= у DELETE.
 """
 
+import io
 import json
 from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.urls import reverse
+from PIL import Image
 
 from main_api.models import Food, History, MedCard, Pet, Tamagochi
 
@@ -163,7 +166,7 @@ class TestMain:
     def test_pet_json_shape(self, api, pet):
         assert api.get(MAIN).json()[0] == {
             "id": pet.id, "name": "Барсик", "species": "Кот",
-            "breed": "Британский", "birth_date": "2022-04-12",
+            "breed": "Британский", "birth_date": "2022-04-12", "photo": None,
         }
 
     def test_empty_list(self, api):
@@ -1164,3 +1167,126 @@ class TestTamagochiPage:
         client.force_login(admin_user)
         response = client.get(reverse("admin:main_api_tamagochi_changelist"))
         assert response.status_code == 200 and "Бобик" in response.content.decode()
+
+
+# ---------- Фото питомца ----------
+
+def photo_url(pet_id):
+    return reverse("pet_photo_point", args=[pet_id])
+
+
+def image_file(name="cat.png", size=(10, 10), fmt="PNG"):
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "green").save(buffer, fmt)
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type=f"image/{fmt.lower()}")
+
+
+class TestPetPhoto:
+    @pytest.fixture(autouse=True)
+    def media(self, settings, tmp_path):
+        """Файлы из тестов пишутся во временную папку, а не в настоящую media."""
+        settings.MEDIA_ROOT = tmp_path
+        return tmp_path
+
+    def upload(self, api, pet_id, file):
+        return api.client.post(photo_url(pet_id), {"photo": file}, HTTP_ACCEPT="application/json")
+
+    def test_route(self, pet):
+        assert photo_url(pet.id) == f"/user/pet_photo/{pet.id}"
+
+    def test_upload(self, api, pet, media):
+        response = self.upload(api, pet.id, image_file())
+        assert response.status_code == 200
+        pet.refresh_from_db()
+        assert pet.photo.name.startswith("pets/")
+        assert (media / pet.photo.name).exists()
+        assert response.json()["photo"] == pet.photo.url
+
+    def test_photo_url_is_in_pet_list(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        photo = api.get(MAIN).json()[0]["photo"]
+        assert photo.startswith("/media/pets/")
+
+    @pytest.mark.parametrize("fmt, name", [("JPEG", "cat.jpg"), ("GIF", "cat.gif"), ("WEBP", "cat.webp")])
+    def test_upload_other_formats(self, api, pet, fmt, name):
+        assert self.upload(api, pet.id, image_file(name, fmt=fmt)).status_code == 200
+
+    def test_replace_removes_old_file(self, api, pet, media):
+        self.upload(api, pet.id, image_file("first.png"))
+        pet.refresh_from_db()
+        old = media / pet.photo.name
+        self.upload(api, pet.id, image_file("second.png"))
+        pet.refresh_from_db()
+        assert not old.exists() and (media / pet.photo.name).exists()
+
+    def test_upload_keeps_other_fields(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        assert (pet.name, pet.species, pet.breed) == ("Барсик", "Кот", "Британский")
+
+    def test_upload_requires_file(self, api, pet):
+        response = api.client.post(photo_url(pet.id), {}, HTTP_ACCEPT="application/json")
+        assert response.status_code == 400 and response.json()["detail"] == "Выберите фото."
+
+    def test_upload_rejects_not_image(self, api, pet):
+        file = SimpleUploadedFile("cat.png", b"not an image", content_type="image/png")
+        response = self.upload(api, pet.id, file)
+        assert response.status_code == 400 and "изображение" in response.json()["detail"]
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_upload_rejects_too_big(self, api, pet, monkeypatch):
+        monkeypatch.setattr("main_api.views.PHOTO_MAX_SIZE", 10)
+        response = self.upload(api, pet.id, image_file())
+        assert response.status_code == 400 and "5 МБ" in response.json()["detail"]
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_failed_upload_keeps_old_photo(self, api, pet, media):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        old = pet.photo.name
+        self.upload(api, pet.id, SimpleUploadedFile("x.png", b"oops", content_type="image/png"))
+        pet.refresh_from_db()
+        assert pet.photo.name == old and (media / old).exists()
+
+    def test_delete(self, api, pet, media):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        path = media / pet.photo.name
+        response = api.delete(photo_url(pet.id))
+        assert response.status_code == 200 and response.json()["photo"] is None
+        pet.refresh_from_db()
+        assert not pet.photo and not path.exists()
+
+    def test_delete_without_photo_is_ok(self, api, pet):
+        assert api.delete(photo_url(pet.id)).json()["photo"] is None
+
+    def test_unknown_pet_is_404(self, api):
+        assert self.upload(api, 9999, image_file()).status_code == 404
+        assert api.delete(photo_url(9999)).status_code == 404
+
+    def test_foreign_pet_is_404(self, pet, stranger):
+        client = logged_in(stranger)
+        assert self.upload(client, pet.id, image_file()).status_code == 404
+        assert client.delete(photo_url(pet.id)).status_code == 404
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_requires_login(self, anon, pet):
+        assert self.upload(anon, pet.id, image_file()).status_code == 401
+        assert anon.delete(photo_url(pet.id)).status_code == 401
+
+    def test_requires_csrf_token(self, owner, pet):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
+        assert self.upload(ApiClient(client), pet.id, image_file()).status_code == 403
+
+    @pytest.mark.parametrize("method", ["get", "put"])
+    def test_unsupported_method_is_405(self, api, pet, method):
+        assert api.send(method, photo_url(pet.id), {} if method == "put" else None).status_code == 405
+
+    def test_updating_pet_card_keeps_photo(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        response = api.put(MAIN, {"id": pet.id, "name": "Барсик", "photo": None})
+        assert response.json()["photo"].startswith("/media/pets/")
