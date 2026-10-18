@@ -802,29 +802,38 @@ textarea {
 }
 /* ---------- Вход и регистрация ---------- */
 
-/* пока пользователь не вошёл, приложение скрыто и виден только #auth */
-body.logged-out aside,
-body.logged-out .workspace {
+/* гостю страница открыта; вход и регистрация — окно поверх неё */
+body.logged-out .account,
+body:not(.logged-out) .guest-login {
   display: none;
 }
 .auth {
-  min-height: 100vh;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  overflow-y: auto;
   display: grid;
   place-items: center;
   padding: 40px 16px;
-  background: var(--paper);
+  background: rgb(18 48 38 / 55%);
 }
 .auth[hidden],
 .auth-form[hidden] {
   display: none;
 }
 .auth-card {
+  position: relative;
   width: 100%;
   max-width: 420px;
   background: white;
   border: 1px solid var(--line);
   border-radius: 28px;
   padding: 32px 28px;
+}
+.auth-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
 }
 .auth-card .slogan {
   margin-bottom: 26px;

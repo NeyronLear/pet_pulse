@@ -635,6 +635,13 @@ const fullName = (user) => [user.first_name, user.last_name].filter(Boolean).joi
 
 function profileView() {
   const user = ui.user;
+  if (!user) {
+    return html`
+      <div class="card empty">
+        Войдите, чтобы увидеть профиль.<br>
+        <button class="button" data-action="show-auth">Войти</button>
+      </div>`;
+  }
   const stats = [
     ["Питомцев", state.pets.length],
     ["Записей здоровья", state.health.length],
@@ -1019,15 +1026,25 @@ const actions = {
   },
   export: ({ id }) => exportCalendar(id),
   "auth-mode": ({ mode }) => setAuthMode(mode),
+  "show-auth": () => showAuth(),
+  "close-auth": hideAuth,
   logout: async () => {
     await auth.logout();
-    showAuth();
+    enterGuest();
   },
 };
+
+// Действия, доступные гостю. Любая другая кнопка (добавить, изменить, удалить и т.д.)
+// вместо действия открывает окно входа.
+const GUEST_ACTIONS = new Set(["select-day", "filter-food", "auth-mode", "show-auth", "close-auth"]);
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
+  if (!ui.user && !GUEST_ACTIONS.has(target.dataset.action)) {
+    showAuth();
+    return;
+  }
   try {
     await actions[target.dataset.action]?.(target.dataset, target);
   } catch (error) {
@@ -1087,20 +1104,31 @@ function exportCalendar(id) {
 
 // ---------- Вход, регистрация и выход ----------
 
-// Пока пользователь не вошёл, вместо приложения показывается #auth
-// (body.logged-out прячет боковую панель и рабочую область).
-function showAuth() {
+// Гостю страница открыта (пустая, без данных), а вход и регистрация показываются
+// окном #auth, когда он нажимает кнопку, которой нужна учётная запись.
+function enterGuest() {
   ui.user = null;
   Object.assign(state, emptyState());
   if ($("#editor").open) $("#editor").close();
   document.body.classList.add("logged-out");
-  $("#auth").hidden = false;
-  setAuthMode("login");
+  render();
 }
 
-// Сессия могла закончиться посреди работы: любой 401 возвращает на экран входа.
+function showAuth(mode = "login") {
+  if ($("#editor").open) $("#editor").close();
+  $("#auth").hidden = false;
+  setAuthMode(mode);
+}
+
+function hideAuth() {
+  $("#auth").hidden = true;
+}
+
+// Сессия могла закончиться посреди работы: любой 401 превращает пользователя в гостя
+// и показывает окно входа.
 function isUnauthorized(error) {
   if (error.status !== 401) return false;
+  enterGuest();
   showAuth();
   toast("Сессия закончилась. Войдите снова.");
   return true;
@@ -1131,7 +1159,7 @@ function showAccount(user) {
 
 async function startApp(user) {
   showAccount(user);
-  $("#auth").hidden = true;
+  hideAuth();
   document.body.classList.remove("logged-out");
   try {
     Object.assign(state, await api.load());
@@ -1203,9 +1231,17 @@ async function init() {
     await startApp(await auth.me());
   } catch (error) {
     if (error.status !== 401) console.error(error);
-    showAuth();
+    enterGuest();
   }
 }
+
+// Окно входа можно закрыть крестиком, клавишей Escape или кликом мимо карточки.
+$("#auth").addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) hideAuth();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#auth").hidden) hideAuth();
+});
 
 window.addEventListener("hashchange", render);
 init();

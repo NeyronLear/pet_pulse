@@ -11,6 +11,7 @@
   <body class="logged-out">
     <section id="auth" class="auth" hidden>
       <div class="auth-card">
+        <button type="button" class="icon auth-close" data-action="close-auth" aria-label="Закрыть окно" title="Закрыть">×</button>
         <a class="logo"><img src="{% static 'img/logo.jpeg' %}" alt=""> PetPulse</a>
         <p class="slogan">Профессионально. Бережно. С любовью.</p>
         <div class="filters auth-tabs">
@@ -84,6 +85,7 @@
             <small id="account-email"></small>
           </a>
         </div>
+        <button type="button" class="button guest-login" data-action="show-auth">Войти</button>
       </header>
       <main id="main"></main>
       <footer>
