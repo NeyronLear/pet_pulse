@@ -899,6 +899,13 @@ textarea {
 .auth-form .button {
   margin-top: 6px;
 }
+.auth-judge {
+  margin-top: 14px;
+}
+.auth-judge[hidden],
+#admin-link[hidden] {
+  display: none;
+}
 .button:disabled {
   opacity: 0.6;
   cursor: progress;

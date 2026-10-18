@@ -60,6 +60,18 @@
           <p class="error" aria-live="polite"></p>
           <button type="submit" class="button full">Зарегистрироваться</button>
         </form>
+
+        <form id="judge-form" class="auth-form" data-mode="judge" hidden>
+          <h2>Вход для жюри</h2>
+          <div class="field">
+            <label for="judge-name">Ваше имя *</label>
+            <input id="judge-name" name="name" autocomplete="name" maxlength="50" required>
+          </div>
+          <p class="error" aria-live="polite"></p>
+          <button type="submit" class="button full">Войти как жюри</button>
+        </form>
+
+        <button type="button" class="button light full auth-judge" data-action="auth-mode" data-mode="judge">Вход для жюри</button>
       </div>
     </section>
     <aside>
@@ -80,6 +92,7 @@
     <div class="workspace">
       <header>
         <time id="today"></time>
+        <a id="admin-link" class="button light" href="/admin/" hidden>Админка</a>
         <div class="account">
           <span class="avatar" id="account-initial" aria-hidden="true"></span>
           <a class="account-body" href="#profile" title="Открыть профиль">

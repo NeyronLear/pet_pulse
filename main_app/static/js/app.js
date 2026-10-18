@@ -292,6 +292,7 @@ const auth = {
   updateMe: (body) => request("PUT", "/auth/me", body),
   changePassword: (body) => request("POST", "/auth/password", body),
   login: (body) => request("POST", "/auth/login", body),
+  judgeLogin: (body) => request("POST", "/auth/judge", body),
   register: (body) => request("POST", "/auth/register", body),
   logout: () => request("POST", "/auth/logout"),
 };
@@ -1217,6 +1218,7 @@ function showGuest() {
   $("#account-initial").textContent = "?";
   $("#account-name").textContent = "Гость";
   $("#account-email").textContent = "Войдите или зарегистрируйтесь";
+  $("#admin-link").hidden = true;
   goHome();
   render();
 }
@@ -1240,7 +1242,7 @@ function isUnauthorized(error) {
 }
 
 function setAuthMode(mode) {
-  document.querySelectorAll("[data-action='auth-mode']").forEach((tab) => {
+  document.querySelectorAll(".auth-tabs [data-action='auth-mode']").forEach((tab) => {
     const isActive = tab.dataset.mode === mode;
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-pressed", String(isActive));
@@ -1250,6 +1252,7 @@ function setAuthMode(mode) {
     form.reset();
     form.querySelector(".error").textContent = "";
   });
+  $(".auth-judge").hidden = mode === "judge";
   $(`.auth-form[data-mode="${mode}"] input`).focus();
 }
 
@@ -1260,6 +1263,7 @@ function showAccount(user) {
   $("#account-initial").textContent = initial(name).toUpperCase();
   $("#account-name").textContent = name;
   $("#account-email").textContent = user.email;
+  $("#admin-link").hidden = !user.is_staff;
 }
 
 async function startApp(user) {
@@ -1303,7 +1307,7 @@ function handleAuthForm(form, { send, check = () => "" }) {
       console.error(error);
       // 400 — понятная пользователю причина от сервера, остальное — сбой
       errorBox.textContent =
-        error.status === 400 ? error.message : "Сервер недоступен. Попробуйте позже.";
+        [400, 403].includes(error.status) ? error.message : "Сервер недоступен. Попробуйте позже.";
     } finally {
       submit.disabled = false;
     }
@@ -1312,6 +1316,10 @@ function handleAuthForm(form, { send, check = () => "" }) {
 
 handleAuthForm($("#login-form"), {
   send: ({ login, password }) => auth.login({ login: login.trim(), password }),
+});
+
+handleAuthForm($("#judge-form"), {
+  send: ({ name }) => auth.judgeLogin({ name: name.trim() }),
 });
 
 handleAuthForm($("#register-form"), {

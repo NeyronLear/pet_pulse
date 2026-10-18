@@ -12,11 +12,14 @@ from django.contrib.auth import (
     update_session_auth_hash,
 )
 from django import forms
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils.crypto import constant_time_compare
 from django.utils.decorators import method_decorator
+from django.utils.text import slugify
 from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
@@ -297,6 +300,7 @@ def user_to_json(user) -> dict:
         "first_name": user.first_name,
         "last_name": user.last_name,
         "date_joined": _iso(user.date_joined.date()),
+        "is_staff": user.is_staff,
     }
 
 
@@ -354,6 +358,40 @@ class LoginView(View):
         if user is None:
             return bad_request("Неверный логин или пароль.")
         login(request, user)
+        return JsonResponse(user_to_json(user))
+
+
+class JudgeLoginView(View):
+    """Вход жюри без пароля: у каждого судьи свой аккаунт judge-<имя> с правами
+    администратора, повторный вход с тем же именем — в тот же аккаунт.
+    Выключается JUDGE_LOGIN_ENABLED=0."""
+
+    def post(self, request: HttpRequest):
+        if not settings.JUDGE_LOGIN_ENABLED:
+            return JsonResponse({"detail": "Вход для жюри отключён."}, status=403)
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        name = (data.get("name") or "").strip()
+        slug = slugify(name, allow_unicode=True)
+        if not slug or len(name) > 50:
+            return bad_request("Введите имя (до 50 символов).")
+
+        user, created = get_user_model().objects.get_or_create(
+            username=f"judge-{slug}",
+            defaults={"email": f"judge-{slug}@petpulse.local", "first_name": name},
+        )
+        if created:
+            # у аккаунтов жюри нет пароля — по нему их и отличаем
+            user.set_unusable_password()
+        elif user.has_usable_password():
+            # обычный пользователь с таким логином не должен стать админом
+            return bad_request("Это имя занято, введите другое.")
+        user.is_active = user.is_staff = user.is_superuser = True
+        user.save()
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
         return JsonResponse(user_to_json(user))
 
 

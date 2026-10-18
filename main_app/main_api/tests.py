@@ -766,7 +766,7 @@ def profile_body(**overrides):
 class TestProfile:
     def test_me_json_shape(self, api, owner):
         data = api.get(ME).json()
-        assert set(data) == {"id", "username", "email", "phone", "first_name", "last_name", "date_joined"}
+        assert set(data) == {"id", "username", "email", "phone", "first_name", "last_name", "date_joined", "is_staff"}
         assert data["date_joined"] == owner.date_joined.date().isoformat()
 
     def test_update_profile(self, api, owner):
@@ -1290,3 +1290,58 @@ class TestPetPhoto:
         self.upload(api, pet.id, image_file())
         response = api.put(MAIN, {"id": pet.id, "name": "Барсик", "photo": None})
         assert response.json()["photo"].startswith("/media/pets/")
+
+
+JUDGE = "/user/auth/judge"
+
+
+def judge(client, name="Иван Петров"):
+    return client.post(JUDGE, {"name": name})
+
+
+class TestJudgeLogin:
+    def test_route(self):
+        assert reverse("judge_login") == JUDGE
+
+    def test_judge_logs_in_by_name_without_password(self, anon):
+        response = judge(anon)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "judge-иван-петров" and data["first_name"] == "Иван Петров"
+        assert data["is_staff"]
+        assert anon.get(ME).json()["username"] == "judge-иван-петров"
+
+    def test_judge_is_superuser_and_sees_admin(self, anon):
+        judge(anon)
+        user = get_user_model().objects.get(username="judge-иван-петров")
+        assert user.is_staff and user.is_superuser
+        assert not user.has_usable_password()
+        assert anon.client.get("/admin/").status_code == 200
+
+    def test_each_judge_gets_own_account(self, anon):
+        judge(anon, "Иван")
+        judge(ApiClient(Client()), "Мария")
+        names = get_user_model().objects.filter(is_superuser=True).values_list("username", flat=True)
+        assert sorted(names) == ["judge-иван", "judge-мария"]
+
+    def test_same_name_returns_same_account(self, anon):
+        first = judge(anon, "Иван").json()["id"]
+        assert judge(ApiClient(Client()), " иван ").json()["id"] == first
+
+    @pytest.mark.parametrize("name", ["", "   ", "!!!", "x" * 51])
+    def test_rejects_bad_name(self, anon, name):
+        assert judge(anon, name).status_code == 400
+        assert anon.get(ME).status_code == 401
+
+    def test_regular_user_with_same_username_is_not_promoted(self, anon):
+        get_user_model().objects.create_user(username="judge-иван", email="i@example.com", password=PASSWORD)
+        assert judge(anon, "Иван").status_code == 400
+        assert not get_user_model().objects.get(username="judge-иван").is_staff
+
+    def test_regular_user_is_not_staff(self, api):
+        assert api.get(ME).json()["is_staff"] is False
+
+    def test_disabled_by_setting(self, anon, settings):
+        settings.JUDGE_LOGIN_ENABLED = False
+        assert judge(anon).status_code == 403
+        assert anon.get(ME).status_code == 401

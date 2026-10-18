@@ -5,6 +5,7 @@ from django.urls import path
 from .views import (
     FoodView,
     HistoryView,
+    JudgeLoginView,
     LoginView,
     LogoutView,
     MainView,
@@ -27,6 +28,7 @@ urlpatterns = [
     path("tamagochi", TamagochiView.as_view(), name="tamagochi"),
     path("auth/register", RegisterView.as_view(), name="register"),
     path("auth/login", LoginView.as_view(), name="login"),
+    path("auth/judge", JudgeLoginView.as_view(), name="judge_login"),
     path("auth/logout", LogoutView.as_view(), name="logout"),
     path("auth/me", MeView.as_view(), name="me"),
     path("auth/password", PasswordView.as_view(), name="password"),
