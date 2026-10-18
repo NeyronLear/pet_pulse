@@ -37,13 +37,17 @@ def _wants_json(request: HttpRequest) -> bool:
 
 
 def _body(request: HttpRequest) -> dict:
-    """Разбирает JSON-тело запроса. Пустое тело — это пустой словарь."""
+    """Разбирает JSON-тело запроса. Пустое тело — это пустой словарь,
+    JSON не-объект ([], 1, "строка") — ValueError."""
     if not request.body:
         return {}
     try:
-        return json.loads(request.body.decode("utf-8"))
+        data = json.loads(request.body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("invalid json body") from error
+    if not isinstance(data, dict):
+        raise ValueError("json body is not an object")
+    return data
 
 
 def bad_request(message: str) -> JsonResponse:

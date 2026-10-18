@@ -768,3 +768,194 @@ def test_full_cycle_like_the_frontend(api):
 
     assert api.delete(f"{history_url(pet_id)}?id={created['id']}").status_code == 204
     assert api.get(history_url(pet_id)).json() == []
+
+
+# ---------- Ветки, не покрытые выше ----------
+
+def test_site_root_redirects_to_main(client):
+    response = client.get("/")
+    assert response.status_code == 302 and response.url == MAIN
+
+
+class TestMainExtra:
+    def test_update_pet_rejects_invalid_json(self, api, pet):
+        assert api.put(MAIN, "{not json").status_code == 400
+
+    def test_update_pet_without_id_is_404(self, api, pet):
+        assert api.put(MAIN, {"name": "X"}).status_code == 404
+
+    def test_update_pet_defaults_species_and_strips_name(self, api, pet):
+        data = api.put(MAIN, {"id": pet.id, "name": "  Мурзик "}).json()
+        assert data["name"] == "Мурзик" and data["species"] == "Кот" and data["breed"] == ""
+
+    def test_update_pet_rejects_too_long_name(self, api, pet):
+        assert api.put(MAIN, {"id": pet.id, "name": "я" * 101}).status_code == 400
+        pet.refresh_from_db()
+        assert pet.name == "Барсик"
+
+    def test_create_pet_with_birth_date(self, api):
+        assert api.post(MAIN, {"name": "Рекс", "birth_date": "2020-01-31"}).json()["birth_date"] == "2020-01-31"
+
+
+class TestHistoryExtra:
+    def test_update_rejects_invalid_json(self, api, pet, record):
+        assert api.put(history_url(pet.id), "{").status_code == 400
+
+    def test_update_without_id_is_404(self, api, pet, record):
+        assert api.put(history_url(pet.id), {"title": "Т", "date": "2026-10-17"}).status_code == 404
+
+    def test_update_keeps_type_and_done_when_not_sent(self, api, pet):
+        record = History.objects.create(pet=pet, type="Препарат", title="Т", date=date(2026, 1, 1), done=True)
+        api.put(history_url(pet.id), {"id": record.id, "title": "Т2", "date": "2026-01-01"})
+        record.refresh_from_db()
+        assert (record.type, record.done, record.title) == ("Препарат", True, "Т2")
+
+    def test_update_clears_next_date(self, api, pet, record):
+        api.put(history_url(pet.id), {"id": record.id, "title": "Т", "date": "2026-10-17", "next_date": ""})
+        record.refresh_from_db()
+        assert record.next_date is None
+
+    def test_update_rejects_bad_next_date(self, api, pet, record):
+        body = {"id": record.id, "title": "Т", "date": "2026-10-17", "next_date": "2026-02-30"}
+        assert api.put(history_url(pet.id), body).status_code == 400
+
+    def test_create_with_note_and_next_date(self, api, pet):
+        data = api.post(history_url(pet.id), history_body(pet, note="н", next_date="2027-01-01")).json()
+        assert data["note"] == "н" and data["next_date"] == "2027-01-01"
+
+    def test_create_rejects_too_long_title(self, api, pet):
+        assert api.post(history_url(pet.id), history_body(pet, title="я" * 201)).status_code == 400
+
+
+class TestFoodExtra:
+    def test_unknown_pet_put_and_delete_are_404(self, api):
+        assert api.put(food_url(9999), {}).status_code == 404
+        assert api.delete(f"{food_url(9999)}?id=1").status_code == 404
+
+    def test_create_with_all_fields(self, api, pet):
+        body = food_body(pet, preference="Понравилось", reaction="Зуд")
+        data = api.post(food_url(pet.id), body).json()
+        assert data["preference"] == "Понравилось" and data["reaction"] == "Зуд"
+
+    def test_create_uses_pet_from_url_not_body(self, api, pet, other_pet):
+        assert api.post(food_url(pet.id), food_body(other_pet)).json()["pet"] == pet.id
+
+    def test_create_rejects_invalid_json(self, api, pet):
+        assert api.post(food_url(pet.id), "{").status_code == 400
+
+    def test_create_rejects_too_long_name(self, api, pet):
+        assert api.post(food_url(pet.id), food_body(pet, name="я" * 201)).status_code == 400
+
+    def test_update_rejects_invalid_json(self, api, pet, food):
+        assert api.put(food_url(pet.id), "{").status_code == 400
+
+    @pytest.mark.parametrize("overrides", [{"name": ""}, {"date": ""}, {"date": "2026-02-30"}])
+    def test_update_rejects_invalid_and_does_not_change(self, api, pet, food, overrides):
+        assert api.put(food_url(pet.id), food_body(pet, id=food.id, **overrides)).status_code == 400
+        food.refresh_from_db()
+        assert food.name == "Royal Canin"
+
+    def test_update_keeps_status_preference_reaction_when_empty(self, api, pet):
+        item = Food.objects.create(
+            pet=pet, name="К", date=date(2026, 1, 1),
+            status="Подошло", preference="Понравилось", reaction="Нет",
+        )
+        body = {"id": item.id, "name": "К", "date": "2026-01-01", "status": "", "preference": "", "reaction": ""}
+        assert api.put(food_url(pet.id), body).status_code == 200
+        item.refresh_from_db()
+        assert (item.status, item.preference, item.reaction) == ("Подошло", "Понравилось", "Нет")
+
+    def test_delete_unknown_or_garbage_id(self, api, pet, food):
+        assert api.delete(f"{food_url(pet.id)}?id=9999").status_code == 404
+        assert api.delete(f"{food_url(pet.id)}?id=abc").status_code == 400
+        assert Food.objects.count() == 1
+
+
+class TestMedCardExtra:
+    def test_unknown_pet_write_is_404(self, api):
+        assert api.post(card_url(9999), {}).status_code == 404
+        assert api.put(card_url(9999), {}).status_code == 404
+        assert api.delete(f"{card_url(9999)}?id=1").status_code == 404
+
+    def test_create_with_numeric_weight(self, api, pet):
+        assert api.post(card_url(pet.id), {"weight": 4.5}).json()["weight"] == "4.5"
+
+    def test_create_with_empty_object(self, api, pet):
+        data = api.post(card_url(pet.id), {}).json()
+        assert data["weight"] is None and data["allergies"] == "" and data["pet"] == pet.id
+
+    def test_create_rejects_invalid_json(self, api, pet):
+        assert api.post(card_url(pet.id), "{").status_code == 400
+
+    def test_update_rejects_invalid_json(self, api, pet, card):
+        assert api.put(card_url(pet.id), "{").status_code == 400
+
+    def test_update_rejects_negative_weight(self, api, pet, card):
+        assert api.put(card_url(pet.id), {"id": card.id, "weight": "-0.5"}).status_code == 400
+        card.refresh_from_db()
+        assert str(card.weight) == "4.80"
+
+    def test_update_clears_text_fields(self, api, pet, card):
+        api.put(card_url(pet.id), {"id": card.id, "weight": "5"})
+        card.refresh_from_db()
+        assert card.allergies == "" and str(card.weight) == "5.00"
+
+    def test_delete_unknown_or_garbage_id(self, api, pet, card):
+        assert api.delete(f"{card_url(pet.id)}?id=9999").status_code == 404
+        assert api.delete(f"{card_url(pet.id)}?id=abc").status_code == 400
+        assert MedCard.objects.count() == 1
+
+    def test_can_create_again_after_delete(self, api, pet, card):
+        api.delete(f"{card_url(pet.id)}?id={card.id}")
+        assert api.post(card_url(pet.id), {"weight": "3"}).status_code == 201
+
+
+class TestAuthExtra:
+    def test_login_rejects_invalid_json(self, anon):
+        assert anon.post(LOGIN, "{not json").status_code == 400
+
+    def test_login_by_unknown_email(self, anon, member):
+        assert anon.post(LOGIN, {"login": "nobody@example.com", "password": PASSWORD}).status_code == 400
+
+    def test_login_strips_login(self, anon, member):
+        assert anon.post(LOGIN, {"login": "  anna ", "password": PASSWORD}).status_code == 200
+
+    def test_register_strips_fields(self, anon):
+        response = anon.post(REGISTER, register_body(username=" anna ", email=" Anna@Example.com ", phone=" 123 "))
+        assert response.status_code == 201
+        user = get_user_model().objects.get()
+        assert (user.username, user.email, user.phone) == ("anna", "anna@example.com", "123")
+
+    def test_register_rejects_password_like_username(self, anon):
+        assert anon.post(REGISTER, register_body(username="barsik2026", password="barsik2026")).status_code == 400
+
+    @pytest.mark.parametrize("url", [REGISTER, LOGIN])
+    def test_auth_endpoints_require_post(self, anon, url):
+        assert anon.get(url).status_code == 405
+
+    def test_password_change_requires_post(self, api):
+        assert api.get(PASSWORD_URL).status_code == 405
+
+    def test_password_change_rejects_invalid_json(self, api):
+        assert api.post(PASSWORD_URL, "{not json").status_code == 400
+
+    def test_me_does_not_support_post(self, api):
+        assert api.post(ME, {}).status_code == 405
+
+    def test_failed_profile_update_does_not_touch_session_user(self, api):
+        api.put(ME, profile_body(email="не-почта"))
+        assert api.get(ME).json()["email"] == "owner@example.com"
+
+
+@pytest.mark.parametrize("body", ["[]", "1", '"строка"', "null"])
+@pytest.mark.parametrize("method, url_name", [
+    ("post", "main"), ("put", "main"),
+    ("post", "history_point"), ("put", "history_point"),
+    ("post", "food_point"), ("put", "food_point"),
+    ("post", "med_card_point"), ("put", "med_card_point"),
+    ("post", "register"), ("post", "login"), ("put", "me"), ("post", "password"),
+])
+def test_non_object_json_is_400(api, pet, method, url_name, body):
+    """JSON, который не является объектом, — это 400, а не 500."""
+    args = [pet.id] if url_name.endswith("_point") else []
+    assert api.send(method, reverse(url_name, args=args), body).status_code == 400
