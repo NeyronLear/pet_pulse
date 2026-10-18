@@ -4,7 +4,14 @@ import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from django.contrib.auth import get_user_model
+from django.contrib.auth import (
+    authenticate,
+    get_user_model,
+    login,
+    logout,
+    update_session_auth_hash,
+)
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
@@ -63,13 +70,24 @@ def _time(value):
     return parsed
 
 
-def _owner(request: HttpRequest):
-    """Pet.owner обязателен, а регистрации пока нет: берём текущего пользователя
-    или общего пользователя demo."""
-    if request.user.is_authenticated:
-        return request.user
-    user, _ = get_user_model().objects.get_or_create(username="demo")
-    return user
+def unauthorized() -> JsonResponse:
+    """app.js на любой 401 показывает экран входа."""
+    return JsonResponse({"detail": "Требуется вход."}, status=401)
+
+
+class LoginRequiredJsonMixin:
+    """Пускает в API только вошедших пользователей, остальным — 401 в JSON
+    (стандартный LoginRequiredMixin делает редирект, а fetch'у нужен код)."""
+
+    def dispatch(self, request: HttpRequest, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return unauthorized()
+        return super().dispatch(request, *args, **kwargs)
+
+
+def _pet(request: HttpRequest, pet_id: int) -> Pet:
+    """Питомец текущего пользователя; чужой или несуществующий — 404."""
+    return get_object_or_404(Pet, pk=pet_id, owner=request.user)
 
 
 def _negative_weight(weight) -> bool:
@@ -152,11 +170,18 @@ def medcard_to_json(card: MedCard) -> dict:
 @method_decorator(ensure_csrf_cookie, name="get")
 class MainView(View):
     """GET отдаёт index.html обычному браузеру и список питомцев — fetch'у.
-    POST/PUT — создание/обновление питомца (Pet)."""
+    POST/PUT — создание/обновление питомца (Pet). Страница открыта всем,
+    API — только после входа."""
+
+    def dispatch(self, request: HttpRequest, *args, **kwargs):
+        is_page = request.method == "GET" and not _wants_json(request)
+        if not is_page and not request.user.is_authenticated:
+            return unauthorized()
+        return super().dispatch(request, *args, **kwargs)
 
     def get(self, request: HttpRequest):
         if _wants_json(request):
-            pets = Pet.objects.all().order_by("id")
+            pets = Pet.objects.filter(owner=request.user).order_by("id")
             return JsonResponse([pet_to_json(pet) for pet in pets], safe=False)
         return render(request, "main_api/index.html")
 
@@ -172,7 +197,7 @@ class MainView(View):
 
         try:
             pet = Pet(
-                owner=_owner(request),
+                owner=request.user,
                 name=name,
                 species=data.get("species") or "Кот",
                 breed=data.get("breed") or "",
@@ -188,7 +213,7 @@ class MainView(View):
         except ValueError:
             return bad_request("Некорректный JSON.")
 
-        pet = get_object_or_404(Pet, pk=data.get("id"))
+        pet = get_object_or_404(Pet, pk=data.get("id"), owner=request.user)
         name = (data.get("name") or "").strip()
         if not name:
             return bad_request("Имя питомца обязательно.")
@@ -203,19 +228,159 @@ class MainView(View):
         return _save(pet) or JsonResponse(pet_to_json(pet))
 
 
+# ---------- Регистрация, вход и выход (/auth/...) ----------
+
+def user_to_json(user) -> dict:
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "phone": user.phone,
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "date_joined": _iso(user.date_joined.date()),
+    }
+
+
+class RegisterView(View):
+    """Создаёт пользователя и сразу выполняет вход."""
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        username = (data.get("username") or "").strip()
+        email = (data.get("email") or "").strip().lower()
+        password = data.get("password") or ""
+        if not username or not email or not password:
+            return bad_request("Логин, почта и пароль обязательны.")
+
+        user = get_user_model()(
+            username=username,
+            email=email,
+            phone=(data.get("phone") or "").strip(),
+        )
+        try:
+            # user передаём, чтобы пароль не был похож на логин или почту
+            validate_password(password, user)
+        except ValidationError as error:
+            return bad_request(" ".join(error.messages))
+        user.set_password(password)
+
+        error = _save(user)
+        if error:
+            return error
+        login(request, user)
+        return JsonResponse(user_to_json(user), status=201)
+
+
+class LoginView(View):
+    """Вход по логину или почте."""
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        identifier = (data.get("login") or "").strip()
+        password = data.get("password") or ""
+        if "@" in identifier:
+            found = get_user_model().objects.filter(email__iexact=identifier).first()
+            identifier = found.username if found else ""
+
+        # authenticate сам не пускает неактивных пользователей
+        user = authenticate(request, username=identifier, password=password)
+        if user is None:
+            return bad_request("Неверный логин или пароль.")
+        login(request, user)
+        return JsonResponse(user_to_json(user))
+
+
+class LogoutView(View):
+    """Выход. Только POST, чтобы выйти нельзя было простой ссылкой."""
+
+    def post(self, request: HttpRequest):
+        logout(request)
+        return HttpResponse(status=204)
+
+
+class MeView(LoginRequiredJsonMixin, View):
+    """Текущий пользователь — app.js по нему решает, показывать ли экран входа.
+    PUT — редактирование профиля (логин, почта, телефон, имя, фамилия)."""
+
+    def get(self, request: HttpRequest):
+        return JsonResponse(user_to_json(request.user))
+
+    def put(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        username = (data.get("username") or "").strip()
+        email = (data.get("email") or "").strip().lower()
+        if not username or not email:
+            return bad_request("Логин и почта обязательны.")
+
+        # меняем копию: если данные не пройдут проверку, request.user останется прежним
+        user = get_user_model().objects.get(pk=request.user.pk)
+        user.username = username
+        user.email = email
+        user.phone = (data.get("phone") or "").strip()
+        user.first_name = (data.get("first_name") or "").strip()
+        user.last_name = (data.get("last_name") or "").strip()
+        try:
+            # пароль не редактируется здесь, а у пользователей из createsuperuser/тестов он может быть пустым
+            user.full_clean(exclude=["password"])
+        except ValidationError as error:
+            return bad_request("; ".join(error.messages))
+        user.save()
+        return JsonResponse(user_to_json(user))
+
+
+class PasswordView(LoginRequiredJsonMixin, View):
+    """Смена пароля: нужен текущий пароль. Сессия после смены сохраняется."""
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        user = request.user
+        old_password = data.get("old_password") or ""
+        new_password = data.get("new_password") or ""
+        if not user.check_password(old_password):
+            return bad_request("Текущий пароль указан неверно.")
+        if not new_password:
+            return bad_request("Новый пароль обязателен.")
+        try:
+            validate_password(new_password, user)
+        except ValidationError as error:
+            return bad_request(" ".join(error.messages))
+        user.set_password(new_password)
+        user.save()
+        # иначе Django разлогинит пользователя: хеш сессии зависит от пароля
+        update_session_auth_hash(request, user)
+        return HttpResponse(status=204)
+
+
 # ---------- История / напоминания (RESOURCES.history.path === "/history/<pet_id>") ----------
 
-class HistoryView(View):
+class HistoryView(LoginRequiredJsonMixin, View):
     """CRUD записей History одного питомца.
     done=False — напоминание, done=True — запись здоровья (см. state в script.js)."""
 
     def get(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         records = History.objects.filter(pet_id=pet_id).order_by("date", "time")
         return JsonResponse([history_to_json(record) for record in records], safe=False)
 
     def post(self, request: HttpRequest, pet_id: int):
-        pet = get_object_or_404(Pet, pk=pet_id)
+        pet = _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -242,7 +407,7 @@ class HistoryView(View):
         return _save(record) or JsonResponse(history_to_json(record), status=201)
 
     def put(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -268,7 +433,7 @@ class HistoryView(View):
         return _save(record) or JsonResponse(history_to_json(record))
 
     def delete(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         record_id = request.GET.get("id")
         if not record_id or not record_id.isdigit():
             return bad_request("Не передан id записи.")
@@ -279,12 +444,12 @@ class HistoryView(View):
 
 # ---------- Медкарта (RESOURCES.medCards.path === "/med_card/<pet_id>") ----------
 
-class MedcardView(View):
+class MedcardView(LoginRequiredJsonMixin, View):
     """У питомца не более одной медкарты (OneToOne). Отсутствие карты — это 404,
     script.js ловит такую ошибку через ignoreNotFound и не считает её сбоем."""
 
     def get(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         try:
             card = MedCard.objects.get(pet_id=pet_id)
         except MedCard.DoesNotExist:
@@ -292,7 +457,7 @@ class MedcardView(View):
         return JsonResponse(medcard_to_json(card))
 
     def post(self, request: HttpRequest, pet_id: int):
-        pet = get_object_or_404(Pet, pk=pet_id)
+        pet = _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -314,7 +479,7 @@ class MedcardView(View):
         return _save(card) or JsonResponse(medcard_to_json(card), status=201)
 
     def put(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -336,7 +501,7 @@ class MedcardView(View):
         return JsonResponse(medcard_to_json(card))
 
     def delete(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         card_id = request.GET.get("id")
         if not card_id or not card_id.isdigit():
             return bad_request("Не передан id записи.")
@@ -347,16 +512,16 @@ class MedcardView(View):
 
 # ---------- Питание (RESOURCES.food.path === "/food/<pet_id>") ----------
 
-class FoodView(View):
+class FoodView(LoginRequiredJsonMixin, View):
     """CRUD записей Food одного питомца."""
 
     def get(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         items = Food.objects.filter(pet_id=pet_id).order_by("date")
         return JsonResponse([food_to_json(item) for item in items], safe=False)
 
     def post(self, request: HttpRequest, pet_id: int):
-        pet = get_object_or_404(Pet, pk=pet_id)
+        pet = _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -381,7 +546,7 @@ class FoodView(View):
         return _save(item) or JsonResponse(food_to_json(item), status=201)
 
     def put(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         try:
             data = _body(request)
         except ValueError:
@@ -405,7 +570,7 @@ class FoodView(View):
         return _save(item) or JsonResponse(food_to_json(item))
 
     def delete(self, request: HttpRequest, pet_id: int):
-        get_object_or_404(Pet, pk=pet_id)
+        _pet(request, pet_id)
         item_id = request.GET.get("id")
         if not item_id or not item_id.isdigit():
             return bad_request("Не передан id записи.")

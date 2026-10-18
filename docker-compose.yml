@@ -1,13 +1,20 @@
 services:
   server:
+    environment:
+      - DB_PATH: /data/db.sqlite3
+
     # в CI/на ВМ используется готовый образ из registry; локально — собирается из исходников
     image: ${IMAGE_NAME:-pet_pulse_1337:local}
 
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
 
     env_file:
       - .env
+
+    volumes:
+      - static:/app/main_app/staticfiles
+      - db:/data
 
     healthcheck:
       test:
@@ -21,3 +28,18 @@ services:
       timeout: 3s
       retries: 10
       start_period: 5s
+  
+  nginx:
+    image: nginx:1.29-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - static:/var/www/static:ro
+    depends_on:
+      server:
+        condition: service_healthy
+  
+volumes:
+  static:
+  db:

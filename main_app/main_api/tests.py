@@ -49,14 +49,31 @@ class ApiClient:
 
 
 @pytest.fixture
-def api():
+def owner():
+    # без пароля: хеширование паролей в тестах только замедляет прогон
+    return get_user_model().objects.create(username="owner", email="owner@example.com")
+
+
+def logged_in(user) -> ApiClient:
+    client = Client()
+    client.force_login(user)
+    return ApiClient(client)
+
+
+@pytest.fixture
+def api(owner):
+    """Клиент, вошедший как владелец питомцев из фикстур."""
+    return logged_in(owner)
+
+
+@pytest.fixture
+def anon():
     return ApiClient(Client())
 
 
 @pytest.fixture
-def owner():
-    # без пароля: хеширование паролей в тестах только замедляет прогон
-    return get_user_model().objects.create(username="owner")
+def stranger():
+    return get_user_model().objects.create(username="stranger", email="stranger@example.com")
 
 
 @pytest.fixture
@@ -151,24 +168,12 @@ class TestMain:
     def test_empty_list(self, api):
         assert api.get(MAIN).json() == []
 
-    def test_create_pet_without_login_uses_demo_owner(self, api):
+    def test_create_pet_uses_current_user(self, api, owner):
         response = api.post(MAIN, {"name": " Рекс ", "species": "Собака", "breed": "", "birth_date": None})
         assert response.status_code == 201
         data = response.json()
         assert data["name"] == "Рекс" and data["birth_date"] is None
-        assert Pet.objects.get(pk=data["id"]).owner.username == "demo"
-
-    def test_create_pet_reuses_demo_owner(self, api):
-        api.post(MAIN, {"name": "А"})
-        api.post(MAIN, {"name": "Б"})
-        assert get_user_model().objects.filter(username="demo").count() == 1
-
-    def test_create_pet_logged_in_uses_current_user(self, owner):
-        client = Client()
-        client.force_login(owner)
-        response = ApiClient(client).post(MAIN, {"name": "Рекс"})
-        assert response.status_code == 201
-        assert Pet.objects.get(pk=response.json()["id"]).owner == owner
+        assert Pet.objects.get(pk=data["id"]).owner == owner
 
     def test_create_pet_defaults_species(self, api):
         assert api.post(MAIN, {"name": "Рекс"}).json()["species"] == "Кот"
@@ -496,8 +501,9 @@ class TestSecurity:
         assert strict.send(method, url, body).status_code == 403
         assert Pet.objects.count() == 1 and History.objects.count() == 1
 
-    def test_write_with_valid_token_passes(self, pet):
+    def test_write_with_valid_token_passes(self, owner):
         client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
         client.get(MAIN, HTTP_ACCEPT="text/html")  # выдаёт csrftoken
         response = client.post(
             MAIN, data=json.dumps({"name": "Рекс"}), content_type="application/json",
@@ -511,6 +517,239 @@ class TestSecurity:
 
     def test_main_does_not_support_delete(self, api):
         assert api.delete(MAIN).status_code == 405
+
+
+# ---------- Доступ: без входа и к чужим данным ----------
+
+class TestAccess:
+    def test_page_is_open_without_login(self, anon):
+        response = anon.client.get(MAIN, HTTP_ACCEPT="text/html")
+        assert response.status_code == 200 and b"<html" in response.content
+
+    @pytest.mark.parametrize("method", ["get", "post", "put"])
+    def test_pets_api_requires_login(self, anon, pet, method):
+        response = anon.get(MAIN) if method == "get" else anon.send(method, MAIN, {"id": pet.id, "name": "X"})
+        assert response.status_code == 401
+        pet.refresh_from_db()
+        assert pet.name == "Барсик" and Pet.objects.count() == 1
+
+    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point"])
+    def test_pet_resources_require_login(self, anon, pet, url_name):
+        assert anon.get(reverse(url_name, args=[pet.id])).status_code == 401
+
+    def test_pet_list_shows_only_own_pets(self, pet, stranger):
+        Pet.objects.create(owner=stranger, name="Чужой")
+        assert [p["name"] for p in logged_in(stranger).get(MAIN).json()] == ["Чужой"]
+
+    def test_cannot_update_foreign_pet(self, pet, stranger):
+        response = logged_in(stranger).put(MAIN, {"id": pet.id, "name": "Украден"})
+        assert response.status_code == 404
+        pet.refresh_from_db()
+        assert pet.name == "Барсик"
+
+    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point"])
+    def test_foreign_pet_resources_are_404(self, pet, record, food, card, stranger, url_name):
+        client = logged_in(stranger)
+        url = reverse(url_name, args=[pet.id])
+        assert client.get(url).status_code == 404
+        assert client.post(url, {"title": "x", "name": "x", "date": "2026-10-17"}).status_code == 404
+        assert client.delete(f"{url}?id=1").status_code == 404
+        assert History.objects.count() == Food.objects.count() == MedCard.objects.count() == 1
+
+
+# ---------- Регистрация, вход и выход ----------
+
+REGISTER = "/user/auth/register"
+LOGIN = "/user/auth/login"
+LOGOUT = "/user/auth/logout"
+ME = "/user/auth/me"
+PASSWORD_URL = "/user/auth/password"
+PASSWORD = "Kot-Barsik-2026"
+
+
+def register_body(**overrides):
+    body = {"username": "anna", "email": "Anna@Example.com", "phone": "", "password": PASSWORD}
+    return {**body, **overrides}
+
+
+@pytest.fixture
+def member():
+    return get_user_model().objects.create_user(username="anna", email="anna@example.com", password=PASSWORD)
+
+
+class TestAuth:
+    def test_auth_routes(self):
+        names = ("register", "login", "logout", "me", "password")
+        assert [reverse(n) for n in names] == [REGISTER, LOGIN, LOGOUT, ME, PASSWORD_URL]
+
+    def test_register_creates_user_and_logs_in(self, anon):
+        response = anon.post(REGISTER, register_body(phone="+7 900 000-00-00"))
+        assert response.status_code == 201
+        data = response.json()
+        assert data["username"] == "anna" and data["email"] == "anna@example.com"
+        assert "password" not in data
+        user = get_user_model().objects.get(username="anna")
+        assert user.check_password(PASSWORD) and user.phone == "+7 900 000-00-00"
+        assert anon.get(ME).json()["id"] == user.id
+
+    def test_registered_user_owns_new_pets(self, anon):
+        anon.post(REGISTER, register_body())
+        pet_id = anon.post(MAIN, {"name": "Рекс"}).json()["id"]
+        assert Pet.objects.get(pk=pet_id).owner.username == "anna"
+
+    @pytest.mark.parametrize("overrides", [
+        {"username": ""}, {"email": ""}, {"password": ""},
+        {"email": "не-почта"},
+        {"username": "с пробелом"},
+        {"password": "12345678"},  # слишком простой
+        {"password": "short"},
+        {"password": "anna@example.com"},  # похож на почту
+    ])
+    def test_register_rejects_invalid(self, anon, overrides):
+        response = anon.post(REGISTER, register_body(**overrides))
+        assert response.status_code == 400 and response.json()["detail"]
+        assert not get_user_model().objects.exists()
+
+    def test_register_rejects_taken_username_and_email(self, anon, member):
+        assert anon.post(REGISTER, register_body(email="new@example.com")).status_code == 400
+        response = anon.post(REGISTER, register_body(username="other"))
+        assert response.status_code == 400
+        assert "почт" in response.json()["detail"]
+        assert get_user_model().objects.count() == 1
+
+    def test_register_rejects_invalid_json(self, anon):
+        assert anon.post(REGISTER, "{not json").status_code == 400
+
+    @pytest.mark.parametrize("login", ["anna", "anna@example.com", "ANNA@example.com"])
+    def test_login_by_username_or_email(self, anon, member, login):
+        response = anon.post(LOGIN, {"login": login, "password": PASSWORD})
+        assert response.status_code == 200 and response.json()["username"] == "anna"
+        assert anon.get(ME).status_code == 200
+
+    @pytest.mark.parametrize("body", [
+        {"login": "anna", "password": "wrong"},
+        {"login": "nobody", "password": PASSWORD},
+        {"login": "", "password": ""},
+        {},
+    ])
+    def test_login_rejects_bad_credentials(self, anon, member, body):
+        assert anon.post(LOGIN, body).status_code == 400
+        assert anon.get(ME).status_code == 401
+
+    def test_inactive_user_cannot_login(self, anon, member):
+        member.is_active = False
+        member.save()
+        assert anon.post(LOGIN, {"login": "anna", "password": PASSWORD}).status_code == 400
+
+    def test_logout(self, anon, member, pet):
+        anon.post(LOGIN, {"login": "anna", "password": PASSWORD})
+        assert anon.post(LOGOUT).status_code == 204
+        assert anon.get(ME).status_code == 401
+        assert anon.get(MAIN).status_code == 401
+
+    def test_logout_without_login_is_ok(self, anon):
+        assert anon.post(LOGOUT).status_code == 204
+
+    def test_logout_requires_post(self, api):
+        assert api.get(LOGOUT).status_code == 405
+        assert api.get(ME).status_code == 200
+
+    def test_me_requires_login(self, anon):
+        assert anon.get(ME).status_code == 401
+
+    def test_auth_writes_require_csrf(self, member):
+        client = ApiClient(Client(enforce_csrf_checks=True))
+        assert client.post(LOGIN, {"login": "anna", "password": PASSWORD}).status_code == 403
+        assert client.post(REGISTER, register_body(username="new", email="n@example.com")).status_code == 403
+
+
+# ---------- Профиль: редактирование и смена пароля ----------
+
+def profile_body(**overrides):
+    body = {
+        "username": "anna",
+        "email": "anna@example.com",
+        "phone": "",
+        "first_name": "",
+        "last_name": "",
+    }
+    return {**body, **overrides}
+
+
+class TestProfile:
+    def test_me_json_shape(self, api, owner):
+        data = api.get(ME).json()
+        assert set(data) == {"id", "username", "email", "phone", "first_name", "last_name", "date_joined"}
+        assert data["date_joined"] == owner.date_joined.date().isoformat()
+
+    def test_update_profile(self, api, owner):
+        body = profile_body(email=" Anna@Example.com ", phone="+7 900", first_name="Анна", last_name="Котова")
+        response = api.put(ME, body)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "anna" and data["email"] == "anna@example.com"
+        assert data["first_name"] == "Анна" and data["last_name"] == "Котова"
+        owner.refresh_from_db()
+        assert owner.username == "anna" and owner.phone == "+7 900"
+
+    def test_update_keeps_session(self, api):
+        api.put(ME, profile_body(username="renamed"))
+        assert api.get(ME).json()["username"] == "renamed"
+
+    @pytest.mark.parametrize("overrides", [
+        {"username": ""}, {"email": ""}, {"username": "с пробелом"}, {"email": "не-почта"},
+        {"phone": "1" * 21},
+    ])
+    def test_update_rejects_invalid(self, api, owner, overrides):
+        response = api.put(ME, profile_body(**overrides))
+        assert response.status_code == 400 and response.json()["detail"]
+        owner.refresh_from_db()
+        assert owner.username == "owner" and owner.email == "owner@example.com"
+
+    def test_update_rejects_taken_username_and_email(self, api, owner, stranger):
+        assert api.put(ME, profile_body(username="stranger")).status_code == 400
+        response = api.put(ME, profile_body(email="stranger@example.com"))
+        assert response.status_code == 400 and "почт" in response.json()["detail"]
+        owner.refresh_from_db()
+        assert owner.username == "owner"
+
+    def test_update_own_email_unchanged_is_ok(self, api):
+        assert api.put(ME, profile_body(username="owner", email="owner@example.com")).status_code == 200
+
+    def test_update_rejects_invalid_json(self, api):
+        assert api.put(ME, "{not json").status_code == 400
+
+    def test_profile_requires_login(self, anon):
+        assert anon.put(ME, profile_body()).status_code == 401
+        assert anon.post(PASSWORD_URL, {}).status_code == 401
+
+    def test_change_password(self, member):
+        client = logged_in(member)
+        response = client.post(PASSWORD_URL, {"old_password": PASSWORD, "new_password": "Pes-Reks-2027"})
+        assert response.status_code == 204
+        member.refresh_from_db()
+        assert member.check_password("Pes-Reks-2027")
+        assert client.get(ME).status_code == 200  # сессия не сбросилась
+
+    @pytest.mark.parametrize("body", [
+        {"old_password": "wrong", "new_password": "Pes-Reks-2027"},
+        {"old_password": PASSWORD, "new_password": ""},
+        {"old_password": PASSWORD, "new_password": "12345678"},
+        {"old_password": PASSWORD, "new_password": "anna@example.com"},
+        {},
+    ])
+    def test_change_password_rejects_invalid(self, member, body):
+        response = logged_in(member).post(PASSWORD_URL, body)
+        assert response.status_code == 400 and response.json()["detail"]
+        member.refresh_from_db()
+        assert member.check_password(PASSWORD)
+
+    def test_profile_writes_require_csrf(self, member):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(member)
+        client = ApiClient(client)
+        assert client.put(ME, profile_body(username="x")).status_code == 403
+        assert client.post(PASSWORD_URL, {"old_password": PASSWORD, "new_password": "Pes-Reks-2027"}).status_code == 403
 
 
 # ---------- Контракт с app.js: полный круг запросов ----------
