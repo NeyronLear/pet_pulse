@@ -10,10 +10,11 @@ from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.test import Client
 from django.urls import reverse
 
-from main_api.models import Food, History, MedCard, Pet
+from main_api.models import Food, History, MedCard, Pet, Tamagochi
 
 pytestmark = pytest.mark.django_db
 
@@ -478,6 +479,89 @@ class TestMedCard:
     def test_delete_foreign_is_404(self, api, other_pet, card):
         assert api.delete(f"{card_url(other_pet.id)}?id={card.id}").status_code == 404
         assert MedCard.objects.count() == 1
+
+
+# ---------- Тамагочи ----------
+
+TAMAGOCHI = "/user/tamagochi"
+
+
+class TestTamagochi:
+    @pytest.fixture
+    def tamagochi(self, owner):
+        return Tamagochi.objects.create(owner=owner, name="Бобик", type="dog")
+
+    def test_route(self):
+        assert reverse("tamagochi") == TAMAGOCHI
+
+    def test_missing_is_404(self, api):
+        """app.js считает 404 нормой («тамагочи ещё нет»)."""
+        assert api.get(TAMAGOCHI).status_code == 404
+
+    def test_get(self, api, tamagochi):
+        assert api.get(TAMAGOCHI).json() == {"id": tamagochi.id, "name": "Бобик", "type": "dog"}
+
+    def test_create_uses_current_user(self, api, owner):
+        response = api.post(TAMAGOCHI, {"name": " Мурка ", "type": "cat"})
+        assert response.status_code == 201
+        pet = Tamagochi.objects.get(owner=owner)
+        assert (pet.name, pet.type) == ("Мурка", "cat")
+
+    def test_create_defaults_type(self, api):
+        assert api.post(TAMAGOCHI, {"name": "Бобик"}).json()["type"] == "dog"
+
+    @pytest.mark.parametrize("body", [{}, {"name": "   "}])
+    def test_create_requires_name(self, api, body):
+        assert api.post(TAMAGOCHI, body).status_code == 400
+
+    @pytest.mark.parametrize("body", [{"name": "Б", "type": "fish"}, {"name": "Б" * 21}])
+    def test_create_rejects_bad_values(self, api, body):
+        assert api.post(TAMAGOCHI, body).status_code == 400
+        assert Tamagochi.objects.count() == 0
+
+    def test_create_twice_is_400(self, api, tamagochi):
+        assert api.post(TAMAGOCHI, {"name": "Второй"}).status_code == 400
+        assert Tamagochi.objects.count() == 1
+
+    def test_update(self, api, tamagochi):
+        response = api.put(TAMAGOCHI, {"name": "Шарик", "type": "cat"})
+        assert response.status_code == 200
+        tamagochi.refresh_from_db()
+        assert (tamagochi.name, tamagochi.type) == ("Шарик", "cat")
+
+    def test_update_rejects_bad_values_and_keeps_data(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": ""}).status_code == 400
+        assert api.put(TAMAGOCHI, {"name": "Шарик", "type": "fish"}).status_code == 400
+        tamagochi.refresh_from_db()
+        assert (tamagochi.name, tamagochi.type) == ("Бобик", "dog")
+
+    def test_update_missing_is_404(self, api):
+        assert api.put(TAMAGOCHI, {"name": "Шарик"}).status_code == 404
+
+    def test_delete(self, api, tamagochi):
+        assert api.delete(TAMAGOCHI).status_code == 204
+        assert Tamagochi.objects.count() == 0
+
+    def test_delete_missing_is_404(self, api):
+        assert api.delete(TAMAGOCHI).status_code == 404
+
+    def test_requires_login(self, anon, tamagochi):
+        assert anon.get(TAMAGOCHI).status_code == 401
+        assert anon.delete(TAMAGOCHI).status_code == 401
+        assert Tamagochi.objects.count() == 1
+
+    def test_stranger_sees_only_own(self, tamagochi, stranger):
+        client = logged_in(stranger)
+        assert client.get(TAMAGOCHI).status_code == 404
+        assert client.put(TAMAGOCHI, {"name": "Украден"}).status_code == 404
+        assert client.delete(TAMAGOCHI).status_code == 404
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    @pytest.mark.parametrize("body", ["[]", "{not json"])
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_bad_json_is_400(self, api, tamagochi, method, body):
+        assert api.send(method, TAMAGOCHI, body).status_code == 400
 
 
 # ---------- Каскады ----------
@@ -959,3 +1043,124 @@ def test_non_object_json_is_400(api, pet, method, url_name, body):
     """JSON, который не является объектом, — это 400, а не 500."""
     args = [pet.id] if url_name.endswith("_point") else []
     assert api.send(method, reverse(url_name, args=args), body).status_code == 400
+
+
+# ---------- Тамагочи: дополнительные проверки ----------
+
+class TestTamagochiExtra:
+    @pytest.fixture
+    def tamagochi(self, owner):
+        return Tamagochi.objects.create(owner=owner, name="Бобик", type="dog")
+
+    def test_create_returns_saved_record(self, api, owner):
+        data = api.post(TAMAGOCHI, {"name": "Мурка", "type": "cat"}).json()
+        assert data == {"id": Tamagochi.objects.get(owner=owner).id, "name": "Мурка", "type": "cat"}
+
+    def test_update_returns_saved_record(self, api, tamagochi):
+        data = api.put(TAMAGOCHI, {"name": "Шарик", "type": "cat"}).json()
+        assert data == {"id": tamagochi.id, "name": "Шарик", "type": "cat"}
+
+    def test_update_keeps_type_when_not_sent(self, api, owner):
+        Tamagochi.objects.create(owner=owner, name="Мурка", type="cat")
+        assert api.put(TAMAGOCHI, {"name": "Мурёна"}).json()["type"] == "cat"
+
+    def test_update_trims_name(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": "  Шарик  "}).json()["name"] == "Шарик"
+
+    def test_name_of_max_length_is_ok(self, api):
+        assert api.post(TAMAGOCHI, {"name": "я" * 20}).status_code == 201
+
+    def test_update_rejects_too_long_name(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": "я" * 21}).status_code == 400
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    def test_update_ignores_id_in_body(self, api, tamagochi, stranger):
+        """Обновляется всегда тамагочи текущего пользователя, id из тела не важен."""
+        foreign = Tamagochi.objects.create(owner=stranger, name="Чужой")
+        api.put(TAMAGOCHI, {"id": foreign.id, "name": "Шарик"})
+        foreign.refresh_from_db()
+        tamagochi.refresh_from_db()
+        assert (foreign.name, tamagochi.name) == ("Чужой", "Шарик")
+
+    def test_can_create_again_after_delete(self, api, tamagochi):
+        api.delete(TAMAGOCHI)
+        assert api.post(TAMAGOCHI, {"name": "Новый"}).status_code == 201
+
+    def test_users_have_separate_tamagochi(self, api, tamagochi, stranger):
+        client = logged_in(stranger)
+        assert client.post(TAMAGOCHI, {"name": "Мурка", "type": "cat"}).status_code == 201
+        assert api.get(TAMAGOCHI).json()["name"] == "Бобик"
+        assert client.get(TAMAGOCHI).json()["name"] == "Мурка"
+
+    @pytest.mark.parametrize("body", ["null", "1", '"строка"'])
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_non_object_json_is_400(self, api, tamagochi, method, body):
+        assert api.send(method, TAMAGOCHI, body).status_code == 400
+
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_writes_require_login(self, anon, method):
+        assert anon.send(method, TAMAGOCHI, {"name": "Бобик"}).status_code == 401
+        assert Tamagochi.objects.count() == 0
+
+    def test_logout_closes_access(self, owner, tamagochi):
+        client = logged_in(owner)
+        client.post(LOGOUT)
+        assert client.get(TAMAGOCHI).status_code == 401
+
+    @pytest.mark.parametrize("method", ["post", "put", "delete"])
+    def test_writes_require_csrf_token(self, owner, tamagochi, method):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
+        body = None if method == "delete" else {"name": "Шарик"}
+        assert ApiClient(client).send(method, TAMAGOCHI, body).status_code == 403
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    def test_unsupported_method_is_405(self, api):
+        assert api.send("patch", TAMAGOCHI, {}).status_code == 405
+
+
+class TestTamagochiModel:
+    def test_str(self, owner):
+        assert str(Tamagochi(owner=owner, name="Бобик")) == "Бобик"
+
+    def test_default_type_is_dog(self, owner):
+        assert Tamagochi.objects.create(owner=owner, name="Бобик").type == "dog"
+
+    def test_one_per_user_in_database(self, owner):
+        Tamagochi.objects.create(owner=owner, name="Первый")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Tamagochi.objects.create(owner=owner, name="Второй")
+
+    def test_deleting_user_removes_tamagochi(self, owner):
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        owner.delete()
+        assert not Tamagochi.objects.exists()
+
+    def test_deleting_pets_keeps_tamagochi(self, owner, pet):
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        pet.delete()
+        assert Tamagochi.objects.count() == 1
+
+    def test_accessible_from_user(self, owner):
+        pet = Tamagochi.objects.create(owner=owner, name="Бобик")
+        owner.refresh_from_db()
+        assert owner.tamagochi == pet
+
+
+class TestTamagochiPage:
+    def test_page_loads_widget_before_app(self, client):
+        page = client.get(MAIN, HTTP_ACCEPT="text/html").content.decode()
+        widget, helpers, app = (page.index(f"js/{name}.js") for name in ("pet-widget", "pet-app", "app"))
+        assert widget < helpers < app
+
+    def test_admin_lists_tamagochi(self, owner):
+        admin_user = get_user_model().objects.create(
+            username="admin", email="admin@example.com", is_staff=True, is_superuser=True,
+        )
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        client = Client()
+        client.force_login(admin_user)
+        response = client.get(reverse("admin:main_api_tamagochi_changelist"))
+        assert response.status_code == 200 and "Бобик" in response.content.decode()

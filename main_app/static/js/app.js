@@ -282,6 +282,14 @@ const auth = {
   logout: () => request("POST", "/auth/logout"),
 };
 
+// Тамагочи у пользователя один, поэтому маршрут без id. Нет тамагочи — null.
+const tamagochi = {
+  get: () => request("GET", "/tamagochi").catch(ignoreNotFound),
+  create: (body) => request("POST", "/tamagochi", body),
+  update: (body) => request("PUT", "/tamagochi", body),
+  remove: () => request("DELETE", "/tamagochi"),
+};
+
 async function saveItem(bucket, item) {
   const saved = await api.save(bucket, item);
   const index = state[bucket].findIndex((x) => sameId(x.id, saved.id));
@@ -684,8 +692,42 @@ function profileView() {
             <button class="button-danger" data-action="logout">Выйти из аккаунта</button>
           </div>
         </section>
+        ${tamagochiCard()}
       </div>
     </div>`;
+}
+
+// ---------- Тамагочи ----------
+
+// Виджет из pet-widget.js живёт в углу экрана на всех страницах.
+// Имя и тип хранятся на сервере (модель Tamagochi), положение на экране — в браузере.
+const TAMAGOCHI_TYPES = [
+  ["dog", "Собака"],
+  ["cat", "Кот"],
+];
+
+function tamagochiCard() {
+  const pet = PetApp.getPet();
+  return html`
+    <section class="card">
+      <div class="section-head">
+        <h2>Тамагочи</h2>
+      </div>
+      <p class="muted">
+        ${pet
+          ? `Питомец «${pet.petName}» живёт в углу экрана. Его можно таскать мышкой и гладить кликом.`
+          : "Заведите виртуального питомца — он будет гулять по сайту."}
+      </p>
+      ${inputField("tamagochi-name", "Имя", { value: pet?.petName ?? "", maxlength: 20 })}
+      ${selectField("tamagochi-type", "Тип", TAMAGOCHI_TYPES, pet?.petType ?? "dog")}
+      <div class="actions">
+        ${pet
+          ? html`
+            <button class="button light" data-action="tamagochi-play">${pet.isPlaying ? "Стоп" : "Играть"}</button>
+            <button class="button-danger" data-action="tamagochi-delete">Удалить</button>`
+          : html`<button class="button" data-action="tamagochi-create">Создать</button>`}
+      </div>
+    </section>`;
 }
 
 // ---------- Страницы и навигация ----------
@@ -988,6 +1030,21 @@ const actions = {
     await auth.logout();
     showGuest();
   },
+  "tamagochi-create": async () => {
+    const name = $("#field-tamagochi-name").value.trim();
+    if (!name) {
+      toast("Придумайте тамагочи имя.");
+      return;
+    }
+    PetApp.showPet(await tamagochi.create({ name, type: $("#field-tamagochi-type").value }));
+    render();
+  },
+  "tamagochi-play": () => PetApp.getPet()?.togglePlayMode(),
+  "tamagochi-delete": async () => {
+    if (!confirm("Удалить тамагочи?")) return;
+    await tamagochi.remove();
+    PetApp.getPet()?.destroy();
+  },
 };
 
 // Гость может смотреть сайт: переходить по страницам, листать дни и фильтры.
@@ -1086,6 +1143,7 @@ function showGuest() {
   ui.user = null;
   Object.assign(state, emptyState());
   if ($("#editor").open) $("#editor").close();
+  PetApp.removePet();
   $("#account-initial").textContent = "?";
   $("#account-name").textContent = "Гость";
   $("#account-email").textContent = "Войдите или зарегистрируйтесь";
@@ -1138,7 +1196,10 @@ async function startApp(user) {
   showAccount(user);
   hideAuth();
   try {
-    Object.assign(state, await api.load());
+    const [data, pet] = await Promise.all([api.load(), tamagochi.get(), PetApp.ready]);
+    Object.assign(state, data);
+    if (pet) PetApp.showPet(pet);
+    else PetApp.removePet();
   } catch (error) {
     console.error(error);
     if (isUnauthorized(error)) return;
@@ -1213,6 +1274,29 @@ async function init() {
 }
 
 window.addEventListener("hashchange", render);
+// Тамагочи меняется и без кнопок профиля (например, режим игры), поэтому карточку перерисовываем.
+const renderTamagochiCard = () => {
+  if (currentPage() === "profile") render();
+};
+document.addEventListener("pet-closed", renderTamagochiCard);
+document.addEventListener("pet-play-changed", renderTamagochiCard);
+document.addEventListener("change", async (event) => {
+  const field = event.target.id;
+  if (field !== "field-tamagochi-name" && field !== "field-tamagochi-type") return;
+  if (!PetApp.getPet()) return;
+  try {
+    PetApp.showPet(
+      await tamagochi.update({
+        name: $("#field-tamagochi-name").value.trim(),
+        type: $("#field-tamagochi-type").value,
+      }),
+    );
+  } catch (error) {
+    console.error(error);
+    if (!isUnauthorized(error)) toast(error.status === 400 ? error.message : "Не удалось сохранить тамагочи.");
+  }
+  renderTamagochiCard();
+});
 $("#auth").addEventListener("click", (event) => {
   if (event.target === event.currentTarget) hideAuth();
 });

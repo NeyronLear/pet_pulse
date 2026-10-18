@@ -20,7 +20,7 @@ from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from .models import Food, History, MedCard, Pet
+from .models import Food, History, MedCard, Pet, Tamagochi
 
 
 def test(request: HttpRequest) -> HttpResponse:
@@ -166,6 +166,14 @@ def medcard_to_json(card: MedCard) -> dict:
         "allergies": card.allergies,
         "chronic_conditions": card.chronic_conditions,
         "notes": card.notes,
+    }
+
+
+def tamagochi_to_json(pet: Tamagochi) -> dict:
+    return {
+        "id": pet.id,
+        "name": pet.name,
+        "type": pet.type,
     }
 
 
@@ -580,4 +588,51 @@ class FoodView(LoginRequiredJsonMixin, View):
             return bad_request("Не передан id записи.")
         item = get_object_or_404(Food, pk=item_id, pet_id=pet_id)
         item.delete()
+        return JsonResponse(None, safe=False, status=204)
+
+
+# ---------- Тамагочи (tamagochi.path === "/tamagochi") ----------
+
+class TamagochiView(LoginRequiredJsonMixin, View):
+    """У пользователя не более одного тамагочи (OneToOne), поэтому id не нужен.
+    Отсутствие тамагочи — это 404, как у медкарты."""
+
+    def get(self, request: HttpRequest):
+        try:
+            pet = Tamagochi.objects.get(owner=request.user)
+        except Tamagochi.DoesNotExist:
+            return JsonResponse({"detail": "Тамагочи не найден."}, status=404)
+        return JsonResponse(tamagochi_to_json(pet))
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        if Tamagochi.objects.filter(owner=request.user).exists():
+            return bad_request("Тамагочи уже существует, используйте обновление.")
+
+        name = (data.get("name") or "").strip()
+        if not name:
+            return bad_request("Имя тамагочи обязательно.")
+        pet = Tamagochi(owner=request.user, name=name, type=data.get("type") or "dog")
+        return _save(pet) or JsonResponse(tamagochi_to_json(pet), status=201)
+
+    def put(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        pet = get_object_or_404(Tamagochi, owner=request.user)
+        name = (data.get("name") or "").strip()
+        if not name:
+            return bad_request("Имя тамагочи обязательно.")
+        pet.name = name
+        pet.type = data.get("type") or pet.type
+        return _save(pet) or JsonResponse(tamagochi_to_json(pet))
+
+    def delete(self, request: HttpRequest):
+        get_object_or_404(Tamagochi, owner=request.user).delete()
         return JsonResponse(None, safe=False, status=204)

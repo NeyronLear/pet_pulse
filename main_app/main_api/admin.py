@@ -2,7 +2,7 @@
 
 from django.contrib import admin
 
-from .models import User, Pet, MedCard, Food, History
+from .models import User, Pet, MedCard, Food, History, Tamagochi
 
 
 class AdminUser(admin.ModelAdmin):
@@ -114,8 +114,20 @@ class AdminHistory(admin.ModelAdmin):
         model = History
 
 
+class AdminTamagochi(admin.ModelAdmin):
+    """Модель Tamagochi для админки"""
+
+    list_display = ["owner", "name", "type", "created_at", "updated_at"]
+    search_fields = ["owner__username", "name"]
+    list_filter = ["type", "created_at"]
+
+    class Meta:
+        model = Tamagochi
+
+
 admin.site.register(User, AdminUser)
 admin.site.register(Pet, AdminPet)
 admin.site.register(MedCard, AdminMedcard)
 admin.site.register(Food, AdminFood)
 admin.site.register(History, AdminHistory)
+admin.site.register(Tamagochi, AdminTamagochi)
