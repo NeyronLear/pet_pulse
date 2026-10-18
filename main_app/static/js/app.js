@@ -100,16 +100,19 @@ const csrfToken = () =>
     .find((row) => row.startsWith("csrftoken="))
     ?.split("=")[1] ?? "";
 
+// body — объект (уходит как JSON) или FormData с файлами (Content-Type с границей
+// частей multipart браузер проставит сам).
 async function request(method, path, body) {
+  const isForm = body instanceof FormData;
   const response = await fetch(API_ROOT + path, {
     method,
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
-      ...(body !== undefined && { "Content-Type": "application/json" }),
+      ...(body !== undefined && !isForm && { "Content-Type": "application/json" }),
       ...(method !== "GET" && { "X-CSRFToken": csrfToken() }),
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined || isForm ? body : JSON.stringify(body),
   });
   if (!response.ok) {
     // Ошибки вьюх приходят как {"detail": "..."} — этот текст можно показать пользователю.
@@ -139,6 +142,7 @@ const RESOURCES = {
       species: row.species,
       breed: row.breed,
       birth: row.birth_date ?? "",
+      photo: row.photo ?? "", // адрес картинки; меняется только через api.savePhoto/removePhoto
     }),
     toServer: (pet) => ({
       id: pet.id,
@@ -265,6 +269,16 @@ const api = {
     );
     return resource.fromServer(saved);
   },
+  // Фото загружается отдельным запросом: JSON файлы не передаёт.
+  // Сервер отвечает питомцем целиком, как при обычном сохранении.
+  async savePhoto(petId, file) {
+    const body = new FormData();
+    body.append("photo", file);
+    return RESOURCES.pets.fromServer(await request("POST", `/pet_photo/${petId}`, body));
+  },
+  async removePhoto(petId) {
+    return RESOURCES.pets.fromServer(await request("DELETE", `/pet_photo/${petId}`));
+  },
   // id удаляемой записи уходит в query-параметре: DELETE /user/history/<pet_id>?id=<id>
   async remove(bucket, item) {
     const path = RESOURCES[bucket].path(item.pet);
@@ -278,6 +292,7 @@ const auth = {
   updateMe: (body) => request("PUT", "/auth/me", body),
   changePassword: (body) => request("POST", "/auth/password", body),
   login: (body) => request("POST", "/auth/login", body),
+  judgeLogin: (body) => request("POST", "/auth/judge", body),
   register: (body) => request("POST", "/auth/register", body),
   logout: () => request("POST", "/auth/logout"),
 };
@@ -289,11 +304,24 @@ const pushApi = {
   unsubscribe: (endpoint) => request("DELETE", "/push/subscribe", { endpoint }),
 };
 
-async function saveItem(bucket, item) {
-  const saved = await api.save(bucket, item);
+// Тамагочи у пользователя один, поэтому маршрут без id. Нет тамагочи — null.
+const tamagochi = {
+  get: () => request("GET", "/tamagochi").catch(ignoreNotFound),
+  create: (body) => request("POST", "/tamagochi", body),
+  update: (body) => request("PUT", "/tamagochi", body),
+  remove: () => request("DELETE", "/tamagochi"),
+};
+
+// Кладёт сохранённую запись в state: новую добавляет, существующую заменяет.
+function replaceItem(bucket, saved) {
   const index = state[bucket].findIndex((x) => sameId(x.id, saved.id));
   if (index < 0) state[bucket].push(saved);
   else state[bucket][index] = saved;
+}
+
+async function saveItem(bucket, item) {
+  const saved = await api.save(bucket, item);
+  replaceItem(bucket, saved);
   return saved;
 }
 
@@ -345,13 +373,16 @@ function eventRow(item) {
       <span class="symbol ${isMedicine && "yellow"}" aria-hidden="true">${isMedicine ? "◒" : "+"}</span>
       <div class="event-body">
         <strong>${item.title}</strong>
-        <small>${petName(item.pet)} · ${item.type}</small>
+        <small>${petTag(item.pet)} · ${item.type}</small>
       </div>
       <small>${item.time || "Весь день"}</small>
       <button class="check" data-action="toggle-done" data-id="${item.id}"
         aria-label="${item.done ? "Отменить выполнение" : "Отметить выполненным"}">${item.done ? "✓" : ""}</button>
     </div>`;
 }
+
+// Заглушка пустого раздела: на всех страницах одна и та же карточка во всю ширину.
+const emptyCard = (text) => html`<div class="card empty">${text}</div>`;
 
 function eventList(items) {
   return items.length
@@ -449,10 +480,22 @@ function homePetsCard() {
     </section>`;
 }
 
+// Фото питомца, а если его нет — первая буква имени. size — доп. класс размера, например "small".
+const petAvatar = (pet, size = "") => html`
+  <span class="avatar ${size}">${pet.photo ? html`<img src="${pet.photo}" alt="">` : initial(pet.name)}</span>`;
+
+// Подпись «аватарка + имя» для записей, которые относятся к питомцу.
+function petTag(id) {
+  const pet = findById(state.pets, id);
+  return pet
+    ? html`<span class="pet-tag">${petAvatar(pet, "small")}${pet.name}</span>`
+    : petName(id);
+}
+
 function miniPet(pet) {
   return html`
     <a class="mini-pet" href="#pets">
-      <span class="avatar">${initial(pet.name)}</span>
+      ${petAvatar(pet)}
       <div>
         <strong>${pet.name}</strong>
         <p>${pet.species} · ${pet.breed || "Порода не указана"}</p>
@@ -470,13 +513,11 @@ function petsView() {
       kind: "pet",
       button: "Добавить питомца",
     })}
-    <div class="pet-grid">
-      ${
-        state.pets.length
-          ? state.pets.map(petCard)
-          : html`<div class="card empty">Здесь появятся ваши питомцы.</div>`
-      }
-    </div>`;
+    ${
+      state.pets.length
+        ? html`<div class="pet-grid">${state.pets.map(petCard)}</div>`
+        : emptyCard("Здесь появятся ваши питомцы.")
+    }`;
 }
 
 function petCard(pet) {
@@ -485,7 +526,7 @@ function petCard(pet) {
   );
   return html`
     <article class="card pet-card">
-      <div class="avatar">${initial(pet.name)}</div>
+      ${petAvatar(pet)}
       <h2>${pet.name}</h2>
       <p class="muted">${pet.species} · ${pet.breed || "Без указанной породы"}</p>
       <dl>
@@ -521,7 +562,7 @@ function healthView() {
     ${
       records.length
         ? records.map(healthRecord)
-        : html`<div class="card empty">Пока нет записей здоровья.</div>`
+        : emptyCard("Пока нет записей здоровья.")
     }`;
 }
 
@@ -535,7 +576,10 @@ function medCard(pet) {
   return html`
     <article class="card record">
       <span class="eyebrow">МЕДКАРТА</span>
-      <h2>${pet.name}</h2>
+      <div class="pet-title">
+        ${petAvatar(pet)}
+        <h2>${pet.name}</h2>
+      </div>
       ${
         card
           ? html`
@@ -555,7 +599,7 @@ function healthRecord(record) {
   return html`
     <article class="card record">
       <div class="section-head">
-        <span class="eyebrow">${petName(record.pet)} · ${record.type}</span>
+        <span class="eyebrow">${petTag(record.pet)} · ${record.type}</span>
         <span class="muted">${formatDate(record.date)}</span>
       </div>
       <h2>${record.title}</h2>
@@ -585,13 +629,11 @@ function foodView() {
       button: "Добавить корм",
     })}
     <div class="filters">${FOOD_FILTERS.map(foodFilterButton)}</div>
-    <div class="food-grid">
-      ${
-        items.length
-          ? items.map(foodCard)
-          : html`<div class="card empty">${emptyText}</div>`
-      }
-    </div>`;
+    ${
+      items.length
+        ? html`<div class="food-grid">${items.map(foodCard)}</div>`
+        : emptyCard(emptyText)
+    }`;
 }
 
 function foodFilterButton(value) {
@@ -601,7 +643,7 @@ function foodFilterButton(value) {
 function foodCard(item) {
   return html`
     <article class="card record">
-      <span class="eyebrow">${petName(item.pet)}</span>
+      <span class="eyebrow">${petTag(item.pet)}</span>
       <h2>${item.title}</h2>
       <p>${item.note}</p>
       <div class="section-head">
@@ -622,12 +664,11 @@ function remindersView() {
       kind: "event",
       button: "Добавить напоминание",
     })}
-      ${
-        items.length
-          ? items.map(reminderItem)
-          : html`<div class="empty">Пока нет напоминаний</div>`
-      }
-    </section>`;
+    ${
+      items.length
+        ? html`<section class="card">${items.map(reminderItem)}</section>`
+        : emptyCard("Пока нет напоминаний.")
+    }`;
 }
 
 function reminderItem(item) {
@@ -649,13 +690,6 @@ const fullName = (user) => [user.first_name, user.last_name].filter(Boolean).joi
 
 function profileView() {
   const user = ui.user;
-  if (!user) {
-    return html`
-      <div class="card empty">
-        Войдите, чтобы увидеть профиль.<br>
-        <button class="button" data-action="show-auth">Войти</button>
-      </div>`;
-  }
   const stats = [
     ["Питомцев", state.pets.length],
     ["Записей здоровья", state.health.length],
@@ -707,6 +741,7 @@ function profileView() {
             <button class="button-danger" data-action="logout">Выйти из аккаунта</button>
           </div>
         </section>
+        ${tamagochiCard()}
       </div>
     </div>`;
 }
@@ -739,6 +774,39 @@ function pushCard() {
     </section>`;
 }
 
+// ---------- Тамагочи ----------
+
+// Виджет из pet-widget.js живёт в углу экрана на всех страницах.
+// Имя и тип хранятся на сервере (модель Tamagochi), положение на экране — в браузере.
+const TAMAGOCHI_TYPES = [
+  ["dog", "Собака"],
+  ["cat", "Кот"],
+];
+
+function tamagochiCard() {
+  const pet = PetApp.getPet();
+  return html`
+    <section class="card">
+      <div class="section-head">
+        <h2>Тамагочи</h2>
+      </div>
+      <p class="muted">
+        ${pet
+          ? `Питомец «${pet.petName}» живёт в углу экрана. Его можно таскать мышкой и гладить кликом.`
+          : "Заведите виртуального питомца — он будет гулять по сайту."}
+      </p>
+      ${inputField("tamagochi-name", "Имя", { value: pet?.petName ?? "", maxlength: 20 })}
+      ${selectField("tamagochi-type", "Тип", TAMAGOCHI_TYPES, pet?.petType ?? "dog")}
+      <div class="actions">
+        ${pet
+          ? html`
+            <button class="button light" data-action="tamagochi-play">${pet.isPlaying ? "Стоп" : "Играть"}</button>
+            <button class="button-danger" data-action="tamagochi-delete">Удалить</button>`
+          : html`<button class="button" data-action="tamagochi-create">Создать</button>`}
+      </div>
+    </section>`;
+}
+
 // ---------- Страницы и навигация ----------
 
 // title показывается во вкладке браузера: «<title> · PetPulse».
@@ -754,6 +822,8 @@ const PAGES = {
 // location.hash начинается с «#», поэтому первый символ отбрасываем.
 function currentPage() {
   const name = location.hash.slice(1);
+  // Профиль есть только у вошедшего пользователя
+  if (name === "profile" && !ui.user) return "home";
   return Object.hasOwn(PAGES, name) ? name : "home";
 }
 
@@ -804,6 +874,20 @@ const textareaField = (name, label, value = "") => html`
   </div>`;
 const noteField = () => textareaField("note", "Наблюдения и заметки");
 
+// Ограничение сервера (PHOTO_MAX_SIZE во views.py) проверяем заранее, чтобы не гонять большой файл зря.
+const PHOTO_MAX_SIZE = 5 * 1024 * 1024;
+
+const photoField = (pet) => html`
+  <div class="field">
+    <label for="field-photo">${pet.photo ? "Заменить фото" : "Фото"}</label>
+    ${pet.photo && html`<img class="photo-preview" src="${pet.photo}" alt="Текущее фото">`}
+    <input id="field-photo" name="photo" type="file" accept="image/*">
+    ${pet.photo && html`
+      <label class="checkbox">
+        <input type="checkbox" name="remove_photo"> Удалить фото
+      </label>`}
+  </div>`;
+
 // Варианты поля «Тип» — это History.TYPE_CHOICES из models.py, значение уходит в БД как есть.
 const HISTORY_TYPES = [
   ["Вакцинация", "Вакцинация"],
@@ -820,7 +904,8 @@ const HISTORY_TYPES = [
 //   find     — как искать редактируемую запись, если не по её id
 //   save     — своё сохранение вместо saveItem (для форм, не связанных с питомцами)
 //   noPet    — форму можно открыть, даже если питомцев ещё нет
-//   check    — проверка значений до отправки, возвращает текст ошибки
+//   check    — проверка значений до отправки (values, form), возвращает текст ошибки
+//   afterSave — что сделать с сохранённой записью (например, загрузить фото), возвращает её новую версию
 //   title, fields — заголовок и набор полей; item — редактируемая запись, если она есть
 const EDITORS = {
   pet: {
@@ -841,7 +926,20 @@ const EDITORS = {
       ),
       inputField("breed", "Порода", { value: item.breed }),
       inputField("birth", "Дата рождения", { type: "date", value: item.birth }),
+      photoField(item),
     ],
+    check: (values, form) => {
+      const file = form.elements.photo.files[0];
+      if (file && !file.type.startsWith("image/")) return "Выберите файл с картинкой.";
+      if (file?.size > PHOTO_MAX_SIZE) return "Фото должно быть не больше 5 МБ.";
+      return "";
+    },
+    afterSave: async (pet, form) => {
+      const file = form.elements.photo.files[0];
+      if (file) return api.savePhoto(pet.id, file);
+      if (form.elements.remove_photo?.checked) return api.removePhoto(pet.id);
+      return pet;
+    },
   },
   // Напоминание и запись здоровья — одна модель History, разница в поле done:
   // напоминание ещё не выполнено, запись здоровья — уже выполнена.
@@ -957,12 +1055,15 @@ const hasBlankRequired = (form) =>
 $("#form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  // пароли не обрезаем: пробелы по краям — тоже часть пароля
+  // пароли не обрезаем: пробелы по краям — тоже часть пароля.
+  // Файлы и флажки в values не попадают: их читает из формы afterSave.
   const values = Object.fromEntries(
-    [...new FormData(form)].map(([key, value]) => [
-      key,
-      form.elements[key].type === "password" ? value : value.trim(),
-    ]),
+    [...new FormData(form)]
+      .filter(([key]) => !["file", "checkbox"].includes(form.elements[key].type))
+      .map(([key, value]) => [
+        key,
+        form.elements[key].type === "password" ? value : value.trim(),
+      ]),
   );
 
   if (!form.checkValidity() || hasBlankRequired(form)) {
@@ -977,7 +1078,7 @@ $("#form").addEventListener("submit", async (event) => {
 
   const { kind, id } = ui.editing;
   const editor = EDITORS[kind];
-  const problem = editor.check?.(values);
+  const problem = editor.check?.(values, form);
   if (problem) {
     $("#error").textContent = problem;
     return;
@@ -985,7 +1086,12 @@ $("#form").addEventListener("submit", async (event) => {
   const existing = findEditing(kind, id);
   try {
     if (editor.save) await editor.save(values);
-    else await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
+    else {
+      const saved = await saveItem(editor.bucket, { ...editor.defaults?.(id), ...existing, ...values });
+      // Запись уже на сервере: если afterSave упадёт, повторное «Сохранить» её обновит, а не создаст заново
+      ui.editing.id = saved.id;
+      if (editor.afterSave) replaceItem(editor.bucket, await editor.afterSave(saved, form));
+    }
   } catch (error) {
     console.error(error);
     if (isUnauthorized(error)) {
@@ -1069,8 +1175,7 @@ const actions = {
   },
   export: ({ id }) => exportCalendar(id),
   "auth-mode": ({ mode }) => setAuthMode(mode),
-  "show-auth": () => showAuth(),
-  "close-auth": hideAuth,
+  "auth-close": () => hideAuth(),
   "push-on": async () => {
     await enablePush();
     render();
@@ -1083,21 +1188,51 @@ const actions = {
   logout: async () => {
     await forgetPushSubscription();
     await auth.logout();
-    enterGuest();
+    showGuest();
+  },
+  "tamagochi-create": async () => {
+    const name = $("#field-tamagochi-name").value.trim();
+    if (!name) {
+      toast("Придумайте тамагочи имя.");
+      return;
+    }
+    PetApp.showPet(await tamagochi.create({ name, type: $("#field-tamagochi-type").value }));
+    render();
+  },
+  "tamagochi-play": () => PetApp.getPet()?.togglePlayMode(),
+  "tamagochi-delete": async () => {
+    if (!confirm("Удалить тамагочи?")) return;
+    await tamagochi.remove();
+    PetApp.getPet()?.destroy();
   },
 };
 
-// Действия, доступные гостю. Любая другая кнопка (добавить, изменить, удалить и т.д.)
-// вместо действия открывает окно входа.
-const GUEST_ACTIONS = new Set(["select-day", "filter-food", "auth-mode", "show-auth", "close-auth"]);
+// Гость может смотреть сайт: переходить по страницам, листать дни и фильтры.
+// Всё, что меняет данные, и профиль вместо действия предлагают зарегистрироваться.
+// Перехват в фазе capture срабатывает раньше остальных обработчиков кликов.
+const GUEST_ACTIONS = new Set(["select-day", "filter-food"]);
+
+function allowedForGuest(element) {
+  if (element.matches("a[href^='#']")) return element.hash !== "#profile";
+  return GUEST_ACTIONS.has(element.dataset.action);
+}
+
+document.addEventListener(
+  "click",
+  (event) => {
+    if (ui.user || event.target.closest("#auth")) return;
+    const target = event.target.closest("a, button");
+    if (!target || allowedForGuest(target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showAuth("register");
+  },
+  true,
+);
 
 document.addEventListener("click", async (event) => {
   const target = event.target.closest("[data-action]");
   if (!target) return;
-  if (!ui.user && !GUEST_ACTIONS.has(target.dataset.action)) {
-    showAuth();
-    return;
-  }
   try {
     await actions[target.dataset.action]?.(target.dataset, target);
   } catch (error) {
@@ -1240,18 +1375,27 @@ async function forgetPushSubscription() {
 
 // ---------- Вход, регистрация и выход ----------
 
-// Гостю страница открыта (пустая, без данных), а вход и регистрация показываются
-// окном #auth, когда он нажимает кнопку, которой нужна учётная запись.
-function enterGuest() {
+// Сайт всегда открывается с главной: адрес страницы в hash сбрасываем.
+function goHome() {
+  history.replaceState(null, "", location.pathname + location.search);
+}
+
+// Гость видит сайт с пустыми данными; войти или зарегистрироваться
+// ему предлагает окно #auth поверх страницы.
+function showGuest() {
   ui.user = null;
   Object.assign(state, emptyState());
   if ($("#editor").open) $("#editor").close();
-  document.body.classList.add("logged-out");
+  PetApp.removePet();
+  $("#account-initial").textContent = "?";
+  $("#account-name").textContent = "Гость";
+  $("#account-email").textContent = "Войдите или зарегистрируйтесь";
+  $("#admin-link").hidden = true;
+  goHome();
   render();
 }
 
 function showAuth(mode = "login") {
-  if ($("#editor").open) $("#editor").close();
   $("#auth").hidden = false;
   setAuthMode(mode);
 }
@@ -1260,18 +1404,17 @@ function hideAuth() {
   $("#auth").hidden = true;
 }
 
-// Сессия могла закончиться посреди работы: любой 401 превращает пользователя в гостя
-// и показывает окно входа.
+// Сессия могла закончиться посреди работы: любой 401 возвращает на главную с окном входа.
 function isUnauthorized(error) {
   if (error.status !== 401) return false;
-  enterGuest();
-  showAuth();
+  showGuest();
+  showAuth("login");
   toast("Сессия закончилась. Войдите снова.");
   return true;
 }
 
 function setAuthMode(mode) {
-  document.querySelectorAll("[data-action='auth-mode']").forEach((tab) => {
+  document.querySelectorAll(".auth-tabs [data-action='auth-mode']").forEach((tab) => {
     const isActive = tab.dataset.mode === mode;
     tab.classList.toggle("active", isActive);
     tab.setAttribute("aria-pressed", String(isActive));
@@ -1281,6 +1424,7 @@ function setAuthMode(mode) {
     form.reset();
     form.querySelector(".error").textContent = "";
   });
+  $(".auth-judge").hidden = mode === "judge";
   $(`.auth-form[data-mode="${mode}"] input`).focus();
 }
 
@@ -1291,14 +1435,17 @@ function showAccount(user) {
   $("#account-initial").textContent = initial(name).toUpperCase();
   $("#account-name").textContent = name;
   $("#account-email").textContent = user.email;
+  $("#admin-link").hidden = !user.is_staff;
 }
 
 async function startApp(user) {
   showAccount(user);
   hideAuth();
-  document.body.classList.remove("logged-out");
   try {
-    Object.assign(state, await api.load());
+    const [data, pet] = await Promise.all([api.load(), tamagochi.get(), PetApp.ready]);
+    Object.assign(state, data);
+    if (pet) PetApp.showPet(pet);
+    else PetApp.removePet();
   } catch (error) {
     console.error(error);
     if (isUnauthorized(error)) return;
@@ -1334,7 +1481,7 @@ function handleAuthForm(form, { send, check = () => "" }) {
       console.error(error);
       // 400 — понятная пользователю причина от сервера, остальное — сбой
       errorBox.textContent =
-        error.status === 400 ? error.message : "Сервер недоступен. Попробуйте позже.";
+        [400, 403].includes(error.status) ? error.message : "Сервер недоступен. Попробуйте позже.";
     } finally {
       submit.disabled = false;
     }
@@ -1343,6 +1490,10 @@ function handleAuthForm(form, { send, check = () => "" }) {
 
 handleAuthForm($("#login-form"), {
   send: ({ login, password }) => auth.login({ login: login.trim(), password }),
+});
+
+handleAuthForm($("#judge-form"), {
+  send: ({ name }) => auth.judgeLogin({ name: name.trim() }),
 });
 
 handleAuthForm($("#register-form"), {
@@ -1365,11 +1516,12 @@ async function init() {
     month: "long",
     year: "numeric",
   });
+  goHome();
   try {
     await startApp(await auth.me());
   } catch (error) {
     if (error.status !== 401) console.error(error);
-    enterGuest();
+    showGuest();
   }
 }
 
@@ -1382,4 +1534,27 @@ document.addEventListener("keydown", (event) => {
 });
 
 window.addEventListener("hashchange", render);
+// Тамагочи меняется и без кнопок профиля (например, режим игры), поэтому карточку перерисовываем.
+const renderTamagochiCard = () => {
+  if (currentPage() === "profile") render();
+};
+document.addEventListener("pet-closed", renderTamagochiCard);
+document.addEventListener("pet-play-changed", renderTamagochiCard);
+document.addEventListener("change", async (event) => {
+  const field = event.target.id;
+  if (field !== "field-tamagochi-name" && field !== "field-tamagochi-type") return;
+  if (!PetApp.getPet()) return;
+  try {
+    PetApp.showPet(
+      await tamagochi.update({
+        name: $("#field-tamagochi-name").value.trim(),
+        type: $("#field-tamagochi-type").value,
+      }),
+    );
+  } catch (error) {
+    console.error(error);
+    if (!isUnauthorized(error)) toast(error.status === 400 ? error.message : "Не удалось сохранить тамагочи.");
+  }
+  renderTamagochiCard();
+});
 init();

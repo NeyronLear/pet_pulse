@@ -12,6 +12,9 @@ load_dotenv()
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 
+# Кнопка «Вход для жюри» хакатона (без пароля, с правами админа); 0 — выключить
+JUDGE_LOGIN_ENABLED = os.environ.get("JUDGE_LOGIN_ENABLED", "1") != "0"
+
 CSRF_TRUSTED_ORIGINS = [f"https://{os.environ.get("FQDN")}"]
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SESSION_COOKIE_SECURE = True
@@ -101,6 +104,11 @@ STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Загруженные файлы (фото питомцев)
+MEDIA_URL = "media/"
+
+MEDIA_ROOT = BASE_DIR / "media"
 
 
 MAILERS = {

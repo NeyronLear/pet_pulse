@@ -4,7 +4,6 @@ import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
-from django.conf import settings
 from django.contrib.auth import (
     authenticate,
     get_user_model,
@@ -12,16 +11,20 @@ from django.contrib.auth import (
     logout,
     update_session_auth_hash,
 )
+from django import forms
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.utils.crypto import constant_time_compare
 from django.utils.decorators import method_decorator
+from django.utils.text import slugify
 from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from .models import Food, History, MedCard, Pet, PushSubscription
+from .models import Food, History, MedCard, Pet, PushSubscription, Tamagochi
 from .push import push_enabled
 
 
@@ -39,13 +42,17 @@ def _wants_json(request: HttpRequest) -> bool:
 
 
 def _body(request: HttpRequest) -> dict:
-    """Разбирает JSON-тело запроса. Пустое тело — это пустой словарь."""
+    """Разбирает JSON-тело запроса. Пустое тело — это пустой словарь,
+    JSON не-объект ([], 1, "строка") — ValueError."""
     if not request.body:
         return {}
     try:
-        return json.loads(request.body.decode("utf-8"))
+        data = json.loads(request.body.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("invalid json body") from error
+    if not isinstance(data, dict):
+        raise ValueError("json body is not an object")
+    return data
 
 
 def bad_request(message: str) -> JsonResponse:
@@ -101,15 +108,6 @@ def _negative_weight(weight) -> bool:
         return False
 
 
-def _negative_weight(weight) -> bool:
-    """Модель не запрещает отрицательный вес, поэтому проверяем здесь.
-    Нечисловое значение отсеет full_clean()."""
-    try:
-        return weight not in ("", None) and Decimal(str(weight)) < 0
-    except InvalidOperation:
-        return False
-
-
 def _save(instance):
     """Проверяет модель (choices, длины, формат веса) и сохраняет.
     Возвращает ответ 400, если данные не прошли проверку, иначе None."""
@@ -134,6 +132,7 @@ def pet_to_json(pet: Pet) -> dict:
         "species": pet.species,
         "breed": pet.breed,
         "birth_date": _iso(pet.birth_date),
+        "photo": pet.photo.url if pet.photo else None,
     }
 
 
@@ -173,6 +172,14 @@ def medcard_to_json(card: MedCard) -> dict:
         "allergies": card.allergies,
         "chronic_conditions": card.chronic_conditions,
         "notes": card.notes,
+    }
+
+
+def tamagochi_to_json(pet: Tamagochi) -> dict:
+    return {
+        "id": pet.id,
+        "name": pet.name,
+        "type": pet.type,
     }
 
 
@@ -239,6 +246,50 @@ class MainView(View):
         return _save(pet) or JsonResponse(pet_to_json(pet))
 
 
+# ---------- Фото питомца (/pet_photo/<pet_id>) ----------
+
+PHOTO_MAX_SIZE = 5 * 1024 * 1024
+
+
+class PetPhotoForm(forms.Form):
+    """ImageField через Pillow проверяет, что файл — действительно картинка."""
+    photo = forms.ImageField(
+        error_messages={
+            "required": "Выберите фото.",
+            "invalid_image": "Файл не похож на изображение.",
+        },
+    )
+
+    def clean_photo(self):
+        photo = self.cleaned_data["photo"]
+        if photo.size > PHOTO_MAX_SIZE:
+            raise ValidationError("Фото должно быть не больше 5 МБ.")
+        return photo
+
+
+class PetPhotoView(LoginRequiredJsonMixin, View):
+    """POST (multipart/form-data, поле photo) ставит или заменяет фото, DELETE убирает его.
+    Оба отвечают питомцем целиком, как MainView."""
+
+    def post(self, request: HttpRequest, pet_id: int):
+        pet = _pet(request, pet_id)
+        form = PetPhotoForm(files=request.FILES)
+        if not form.is_valid():
+            return bad_request("; ".join(form.errors["photo"]))
+        # старый файл удаляем, чтобы в media не копились фото, на которые никто не ссылается
+        pet.photo.delete(save=False)
+        pet.photo = form.cleaned_data["photo"]
+        pet.save(update_fields=["photo", "updated_at"])
+        return JsonResponse(pet_to_json(pet))
+
+    def delete(self, request: HttpRequest, pet_id: int):
+        pet = _pet(request, pet_id)
+        pet.photo.delete(save=False)
+        pet.photo = None
+        pet.save(update_fields=["photo", "updated_at"])
+        return JsonResponse(pet_to_json(pet))
+
+
 # ---------- Регистрация, вход и выход (/auth/...) ----------
 
 def user_to_json(user) -> dict:
@@ -250,6 +301,7 @@ def user_to_json(user) -> dict:
         "first_name": user.first_name,
         "last_name": user.last_name,
         "date_joined": _iso(user.date_joined.date()),
+        "is_staff": user.is_staff,
     }
 
 
@@ -307,6 +359,40 @@ class LoginView(View):
         if user is None:
             return bad_request("Неверный логин или пароль.")
         login(request, user)
+        return JsonResponse(user_to_json(user))
+
+
+class JudgeLoginView(View):
+    """Вход жюри без пароля: у каждого судьи свой аккаунт judge-<имя> с правами
+    администратора, повторный вход с тем же именем — в тот же аккаунт.
+    Выключается JUDGE_LOGIN_ENABLED=0."""
+
+    def post(self, request: HttpRequest):
+        if not settings.JUDGE_LOGIN_ENABLED:
+            return JsonResponse({"detail": "Вход для жюри отключён."}, status=403)
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        name = (data.get("name") or "").strip()
+        slug = slugify(name, allow_unicode=True)
+        if not slug or len(name) > 50:
+            return bad_request("Введите имя (до 50 символов).")
+
+        user, created = get_user_model().objects.get_or_create(
+            username=f"judge-{slug}",
+            defaults={"email": f"judge-{slug}@petpulse.local", "first_name": name},
+        )
+        if created:
+            # у аккаунтов жюри нет пароля — по нему их и отличаем
+            user.set_unusable_password()
+        elif user.has_usable_password():
+            # обычный пользователь с таким логином не должен стать админом
+            return bad_request("Это имя занято, введите другое.")
+        user.is_active = user.is_staff = user.is_superuser = True
+        user.save()
+        login(request, user, backend="django.contrib.auth.backends.ModelBackend")
         return JsonResponse(user_to_json(user))
 
 
@@ -587,6 +673,53 @@ class FoodView(LoginRequiredJsonMixin, View):
             return bad_request("Не передан id записи.")
         item = get_object_or_404(Food, pk=item_id, pet_id=pet_id)
         item.delete()
+        return JsonResponse(None, safe=False, status=204)
+
+
+# ---------- Тамагочи (tamagochi.path === "/tamagochi") ----------
+
+class TamagochiView(LoginRequiredJsonMixin, View):
+    """У пользователя не более одного тамагочи (OneToOne), поэтому id не нужен.
+    Отсутствие тамагочи — это 404, как у медкарты."""
+
+    def get(self, request: HttpRequest):
+        try:
+            pet = Tamagochi.objects.get(owner=request.user)
+        except Tamagochi.DoesNotExist:
+            return JsonResponse({"detail": "Тамагочи не найден."}, status=404)
+        return JsonResponse(tamagochi_to_json(pet))
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        if Tamagochi.objects.filter(owner=request.user).exists():
+            return bad_request("Тамагочи уже существует, используйте обновление.")
+
+        name = (data.get("name") or "").strip()
+        if not name:
+            return bad_request("Имя тамагочи обязательно.")
+        pet = Tamagochi(owner=request.user, name=name, type=data.get("type") or "dog")
+        return _save(pet) or JsonResponse(tamagochi_to_json(pet), status=201)
+
+    def put(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        pet = get_object_or_404(Tamagochi, owner=request.user)
+        name = (data.get("name") or "").strip()
+        if not name:
+            return bad_request("Имя тамагочи обязательно.")
+        pet.name = name
+        pet.type = data.get("type") or pet.type
+        return _save(pet) or JsonResponse(tamagochi_to_json(pet))
+
+    def delete(self, request: HttpRequest):
+        get_object_or_404(Tamagochi, owner=request.user).delete()
         return JsonResponse(None, safe=False, status=204)
 
 

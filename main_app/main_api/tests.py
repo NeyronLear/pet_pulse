@@ -5,15 +5,19 @@
 Accept: application/json, id записи в теле PUT и в ?id= у DELETE.
 """
 
+import io
 import json
 from datetime import date
 
 import pytest
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client
 from django.urls import reverse
+from PIL import Image
 
-from main_api.models import Food, History, MedCard, Pet
+from main_api.models import Food, History, MedCard, Pet, Tamagochi
 
 pytestmark = pytest.mark.django_db
 
@@ -68,31 +72,10 @@ def api(owner):
 
 @pytest.fixture
 def anon():
-def owner():
-    # без пароля: хеширование паролей в тестах только замедляет прогон
-    return get_user_model().objects.create(username="owner", email="owner@example.com")
-
-
-def logged_in(user) -> ApiClient:
-    client = Client()
-    client.force_login(user)
-    return ApiClient(client)
-
-
-@pytest.fixture
-def api(owner):
-    """Клиент, вошедший как владелец питомцев из фикстур."""
-    return logged_in(owner)
-
-
-@pytest.fixture
-def anon():
     return ApiClient(Client())
 
 
 @pytest.fixture
-def stranger():
-    return get_user_model().objects.create(username="stranger", email="stranger@example.com")
 def stranger():
     return get_user_model().objects.create(username="stranger", email="stranger@example.com")
 
@@ -183,7 +166,7 @@ class TestMain:
     def test_pet_json_shape(self, api, pet):
         assert api.get(MAIN).json()[0] == {
             "id": pet.id, "name": "Барсик", "species": "Кот",
-            "breed": "Британский", "birth_date": "2022-04-12",
+            "breed": "Британский", "birth_date": "2022-04-12", "photo": None,
         }
 
     def test_empty_list(self, api):
@@ -501,6 +484,89 @@ class TestMedCard:
         assert MedCard.objects.count() == 1
 
 
+# ---------- Тамагочи ----------
+
+TAMAGOCHI = "/user/tamagochi"
+
+
+class TestTamagochi:
+    @pytest.fixture
+    def tamagochi(self, owner):
+        return Tamagochi.objects.create(owner=owner, name="Бобик", type="dog")
+
+    def test_route(self):
+        assert reverse("tamagochi") == TAMAGOCHI
+
+    def test_missing_is_404(self, api):
+        """app.js считает 404 нормой («тамагочи ещё нет»)."""
+        assert api.get(TAMAGOCHI).status_code == 404
+
+    def test_get(self, api, tamagochi):
+        assert api.get(TAMAGOCHI).json() == {"id": tamagochi.id, "name": "Бобик", "type": "dog"}
+
+    def test_create_uses_current_user(self, api, owner):
+        response = api.post(TAMAGOCHI, {"name": " Мурка ", "type": "cat"})
+        assert response.status_code == 201
+        pet = Tamagochi.objects.get(owner=owner)
+        assert (pet.name, pet.type) == ("Мурка", "cat")
+
+    def test_create_defaults_type(self, api):
+        assert api.post(TAMAGOCHI, {"name": "Бобик"}).json()["type"] == "dog"
+
+    @pytest.mark.parametrize("body", [{}, {"name": "   "}])
+    def test_create_requires_name(self, api, body):
+        assert api.post(TAMAGOCHI, body).status_code == 400
+
+    @pytest.mark.parametrize("body", [{"name": "Б", "type": "fish"}, {"name": "Б" * 21}])
+    def test_create_rejects_bad_values(self, api, body):
+        assert api.post(TAMAGOCHI, body).status_code == 400
+        assert Tamagochi.objects.count() == 0
+
+    def test_create_twice_is_400(self, api, tamagochi):
+        assert api.post(TAMAGOCHI, {"name": "Второй"}).status_code == 400
+        assert Tamagochi.objects.count() == 1
+
+    def test_update(self, api, tamagochi):
+        response = api.put(TAMAGOCHI, {"name": "Шарик", "type": "cat"})
+        assert response.status_code == 200
+        tamagochi.refresh_from_db()
+        assert (tamagochi.name, tamagochi.type) == ("Шарик", "cat")
+
+    def test_update_rejects_bad_values_and_keeps_data(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": ""}).status_code == 400
+        assert api.put(TAMAGOCHI, {"name": "Шарик", "type": "fish"}).status_code == 400
+        tamagochi.refresh_from_db()
+        assert (tamagochi.name, tamagochi.type) == ("Бобик", "dog")
+
+    def test_update_missing_is_404(self, api):
+        assert api.put(TAMAGOCHI, {"name": "Шарик"}).status_code == 404
+
+    def test_delete(self, api, tamagochi):
+        assert api.delete(TAMAGOCHI).status_code == 204
+        assert Tamagochi.objects.count() == 0
+
+    def test_delete_missing_is_404(self, api):
+        assert api.delete(TAMAGOCHI).status_code == 404
+
+    def test_requires_login(self, anon, tamagochi):
+        assert anon.get(TAMAGOCHI).status_code == 401
+        assert anon.delete(TAMAGOCHI).status_code == 401
+        assert Tamagochi.objects.count() == 1
+
+    def test_stranger_sees_only_own(self, tamagochi, stranger):
+        client = logged_in(stranger)
+        assert client.get(TAMAGOCHI).status_code == 404
+        assert client.put(TAMAGOCHI, {"name": "Украден"}).status_code == 404
+        assert client.delete(TAMAGOCHI).status_code == 404
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    @pytest.mark.parametrize("body", ["[]", "{not json"])
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_bad_json_is_400(self, api, tamagochi, method, body):
+        assert api.send(method, TAMAGOCHI, body).status_code == 400
+
+
 # ---------- Каскады ----------
 
 def test_deleting_pet_removes_related_records(pet, record, food, card):
@@ -523,9 +589,7 @@ class TestSecurity:
         assert Pet.objects.count() == 1 and History.objects.count() == 1
 
     def test_write_with_valid_token_passes(self, owner):
-    def test_write_with_valid_token_passes(self, owner):
         client = Client(enforce_csrf_checks=True)
-        client.force_login(owner)
         client.force_login(owner)
         client.get(MAIN, HTTP_ACCEPT="text/html")  # выдаёт csrftoken
         response = client.post(
@@ -624,7 +688,6 @@ class TestAuth:
         {"username": ""}, {"email": ""}, {"password": ""},
         {"email": "не-почта"},
         {"username": "с пробелом"},
-        {"username": "anna@home"},  # «@» — признак почты при входе
         {"password": "12345678"},  # слишком простой
         {"password": "short"},
         {"password": "anna@example.com"},  # похож на почту
@@ -703,7 +766,7 @@ def profile_body(**overrides):
 class TestProfile:
     def test_me_json_shape(self, api, owner):
         data = api.get(ME).json()
-        assert set(data) == {"id", "username", "email", "phone", "first_name", "last_name", "date_joined"}
+        assert set(data) == {"id", "username", "email", "phone", "first_name", "last_name", "date_joined", "is_staff"}
         assert data["date_joined"] == owner.date_joined.date().isoformat()
 
     def test_update_profile(self, api, owner):
@@ -722,7 +785,6 @@ class TestProfile:
 
     @pytest.mark.parametrize("overrides", [
         {"username": ""}, {"email": ""}, {"username": "с пробелом"}, {"email": "не-почта"},
-        {"username": "anna@home"},
         {"phone": "1" * 21},
     ])
     def test_update_rejects_invalid(self, api, owner, overrides):
@@ -793,3 +855,493 @@ def test_full_cycle_like_the_frontend(api):
 
     assert api.delete(f"{history_url(pet_id)}?id={created['id']}").status_code == 204
     assert api.get(history_url(pet_id)).json() == []
+
+
+# ---------- Ветки, не покрытые выше ----------
+
+def test_site_root_redirects_to_main(client):
+    response = client.get("/")
+    assert response.status_code == 302 and response.url == MAIN
+
+
+class TestMainExtra:
+    def test_update_pet_rejects_invalid_json(self, api, pet):
+        assert api.put(MAIN, "{not json").status_code == 400
+
+    def test_update_pet_without_id_is_404(self, api, pet):
+        assert api.put(MAIN, {"name": "X"}).status_code == 404
+
+    def test_update_pet_defaults_species_and_strips_name(self, api, pet):
+        data = api.put(MAIN, {"id": pet.id, "name": "  Мурзик "}).json()
+        assert data["name"] == "Мурзик" and data["species"] == "Кот" and data["breed"] == ""
+
+    def test_update_pet_rejects_too_long_name(self, api, pet):
+        assert api.put(MAIN, {"id": pet.id, "name": "я" * 101}).status_code == 400
+        pet.refresh_from_db()
+        assert pet.name == "Барсик"
+
+    def test_create_pet_with_birth_date(self, api):
+        assert api.post(MAIN, {"name": "Рекс", "birth_date": "2020-01-31"}).json()["birth_date"] == "2020-01-31"
+
+
+class TestHistoryExtra:
+    def test_update_rejects_invalid_json(self, api, pet, record):
+        assert api.put(history_url(pet.id), "{").status_code == 400
+
+    def test_update_without_id_is_404(self, api, pet, record):
+        assert api.put(history_url(pet.id), {"title": "Т", "date": "2026-10-17"}).status_code == 404
+
+    def test_update_keeps_type_and_done_when_not_sent(self, api, pet):
+        record = History.objects.create(pet=pet, type="Препарат", title="Т", date=date(2026, 1, 1), done=True)
+        api.put(history_url(pet.id), {"id": record.id, "title": "Т2", "date": "2026-01-01"})
+        record.refresh_from_db()
+        assert (record.type, record.done, record.title) == ("Препарат", True, "Т2")
+
+    def test_update_clears_next_date(self, api, pet, record):
+        api.put(history_url(pet.id), {"id": record.id, "title": "Т", "date": "2026-10-17", "next_date": ""})
+        record.refresh_from_db()
+        assert record.next_date is None
+
+    def test_update_rejects_bad_next_date(self, api, pet, record):
+        body = {"id": record.id, "title": "Т", "date": "2026-10-17", "next_date": "2026-02-30"}
+        assert api.put(history_url(pet.id), body).status_code == 400
+
+    def test_create_with_note_and_next_date(self, api, pet):
+        data = api.post(history_url(pet.id), history_body(pet, note="н", next_date="2027-01-01")).json()
+        assert data["note"] == "н" and data["next_date"] == "2027-01-01"
+
+    def test_create_rejects_too_long_title(self, api, pet):
+        assert api.post(history_url(pet.id), history_body(pet, title="я" * 201)).status_code == 400
+
+
+class TestFoodExtra:
+    def test_unknown_pet_put_and_delete_are_404(self, api):
+        assert api.put(food_url(9999), {}).status_code == 404
+        assert api.delete(f"{food_url(9999)}?id=1").status_code == 404
+
+    def test_create_with_all_fields(self, api, pet):
+        body = food_body(pet, preference="Понравилось", reaction="Зуд")
+        data = api.post(food_url(pet.id), body).json()
+        assert data["preference"] == "Понравилось" and data["reaction"] == "Зуд"
+
+    def test_create_uses_pet_from_url_not_body(self, api, pet, other_pet):
+        assert api.post(food_url(pet.id), food_body(other_pet)).json()["pet"] == pet.id
+
+    def test_create_rejects_invalid_json(self, api, pet):
+        assert api.post(food_url(pet.id), "{").status_code == 400
+
+    def test_create_rejects_too_long_name(self, api, pet):
+        assert api.post(food_url(pet.id), food_body(pet, name="я" * 201)).status_code == 400
+
+    def test_update_rejects_invalid_json(self, api, pet, food):
+        assert api.put(food_url(pet.id), "{").status_code == 400
+
+    @pytest.mark.parametrize("overrides", [{"name": ""}, {"date": ""}, {"date": "2026-02-30"}])
+    def test_update_rejects_invalid_and_does_not_change(self, api, pet, food, overrides):
+        assert api.put(food_url(pet.id), food_body(pet, id=food.id, **overrides)).status_code == 400
+        food.refresh_from_db()
+        assert food.name == "Royal Canin"
+
+    def test_update_keeps_status_preference_reaction_when_empty(self, api, pet):
+        item = Food.objects.create(
+            pet=pet, name="К", date=date(2026, 1, 1),
+            status="Подошло", preference="Понравилось", reaction="Нет",
+        )
+        body = {"id": item.id, "name": "К", "date": "2026-01-01", "status": "", "preference": "", "reaction": ""}
+        assert api.put(food_url(pet.id), body).status_code == 200
+        item.refresh_from_db()
+        assert (item.status, item.preference, item.reaction) == ("Подошло", "Понравилось", "Нет")
+
+    def test_delete_unknown_or_garbage_id(self, api, pet, food):
+        assert api.delete(f"{food_url(pet.id)}?id=9999").status_code == 404
+        assert api.delete(f"{food_url(pet.id)}?id=abc").status_code == 400
+        assert Food.objects.count() == 1
+
+
+class TestMedCardExtra:
+    def test_unknown_pet_write_is_404(self, api):
+        assert api.post(card_url(9999), {}).status_code == 404
+        assert api.put(card_url(9999), {}).status_code == 404
+        assert api.delete(f"{card_url(9999)}?id=1").status_code == 404
+
+    def test_create_with_numeric_weight(self, api, pet):
+        assert api.post(card_url(pet.id), {"weight": 4.5}).json()["weight"] == "4.5"
+
+    def test_create_with_empty_object(self, api, pet):
+        data = api.post(card_url(pet.id), {}).json()
+        assert data["weight"] is None and data["allergies"] == "" and data["pet"] == pet.id
+
+    def test_create_rejects_invalid_json(self, api, pet):
+        assert api.post(card_url(pet.id), "{").status_code == 400
+
+    def test_update_rejects_invalid_json(self, api, pet, card):
+        assert api.put(card_url(pet.id), "{").status_code == 400
+
+    def test_update_rejects_negative_weight(self, api, pet, card):
+        assert api.put(card_url(pet.id), {"id": card.id, "weight": "-0.5"}).status_code == 400
+        card.refresh_from_db()
+        assert str(card.weight) == "4.80"
+
+    def test_update_clears_text_fields(self, api, pet, card):
+        api.put(card_url(pet.id), {"id": card.id, "weight": "5"})
+        card.refresh_from_db()
+        assert card.allergies == "" and str(card.weight) == "5.00"
+
+    def test_delete_unknown_or_garbage_id(self, api, pet, card):
+        assert api.delete(f"{card_url(pet.id)}?id=9999").status_code == 404
+        assert api.delete(f"{card_url(pet.id)}?id=abc").status_code == 400
+        assert MedCard.objects.count() == 1
+
+    def test_can_create_again_after_delete(self, api, pet, card):
+        api.delete(f"{card_url(pet.id)}?id={card.id}")
+        assert api.post(card_url(pet.id), {"weight": "3"}).status_code == 201
+
+
+class TestAuthExtra:
+    def test_login_rejects_invalid_json(self, anon):
+        assert anon.post(LOGIN, "{not json").status_code == 400
+
+    def test_login_by_unknown_email(self, anon, member):
+        assert anon.post(LOGIN, {"login": "nobody@example.com", "password": PASSWORD}).status_code == 400
+
+    def test_login_strips_login(self, anon, member):
+        assert anon.post(LOGIN, {"login": "  anna ", "password": PASSWORD}).status_code == 200
+
+    def test_register_strips_fields(self, anon):
+        response = anon.post(REGISTER, register_body(username=" anna ", email=" Anna@Example.com ", phone=" 123 "))
+        assert response.status_code == 201
+        user = get_user_model().objects.get()
+        assert (user.username, user.email, user.phone) == ("anna", "anna@example.com", "123")
+
+    def test_register_rejects_password_like_username(self, anon):
+        assert anon.post(REGISTER, register_body(username="barsik2026", password="barsik2026")).status_code == 400
+
+    @pytest.mark.parametrize("url", [REGISTER, LOGIN])
+    def test_auth_endpoints_require_post(self, anon, url):
+        assert anon.get(url).status_code == 405
+
+    def test_password_change_requires_post(self, api):
+        assert api.get(PASSWORD_URL).status_code == 405
+
+    def test_password_change_rejects_invalid_json(self, api):
+        assert api.post(PASSWORD_URL, "{not json").status_code == 400
+
+    def test_me_does_not_support_post(self, api):
+        assert api.post(ME, {}).status_code == 405
+
+    def test_failed_profile_update_does_not_touch_session_user(self, api):
+        api.put(ME, profile_body(email="не-почта"))
+        assert api.get(ME).json()["email"] == "owner@example.com"
+
+
+@pytest.mark.parametrize("body", ["[]", "1", '"строка"', "null"])
+@pytest.mark.parametrize("method, url_name", [
+    ("post", "main"), ("put", "main"),
+    ("post", "history_point"), ("put", "history_point"),
+    ("post", "food_point"), ("put", "food_point"),
+    ("post", "med_card_point"), ("put", "med_card_point"),
+    ("post", "register"), ("post", "login"), ("put", "me"), ("post", "password"),
+])
+def test_non_object_json_is_400(api, pet, method, url_name, body):
+    """JSON, который не является объектом, — это 400, а не 500."""
+    args = [pet.id] if url_name.endswith("_point") else []
+    assert api.send(method, reverse(url_name, args=args), body).status_code == 400
+
+
+# ---------- Тамагочи: дополнительные проверки ----------
+
+class TestTamagochiExtra:
+    @pytest.fixture
+    def tamagochi(self, owner):
+        return Tamagochi.objects.create(owner=owner, name="Бобик", type="dog")
+
+    def test_create_returns_saved_record(self, api, owner):
+        data = api.post(TAMAGOCHI, {"name": "Мурка", "type": "cat"}).json()
+        assert data == {"id": Tamagochi.objects.get(owner=owner).id, "name": "Мурка", "type": "cat"}
+
+    def test_update_returns_saved_record(self, api, tamagochi):
+        data = api.put(TAMAGOCHI, {"name": "Шарик", "type": "cat"}).json()
+        assert data == {"id": tamagochi.id, "name": "Шарик", "type": "cat"}
+
+    def test_update_keeps_type_when_not_sent(self, api, owner):
+        Tamagochi.objects.create(owner=owner, name="Мурка", type="cat")
+        assert api.put(TAMAGOCHI, {"name": "Мурёна"}).json()["type"] == "cat"
+
+    def test_update_trims_name(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": "  Шарик  "}).json()["name"] == "Шарик"
+
+    def test_name_of_max_length_is_ok(self, api):
+        assert api.post(TAMAGOCHI, {"name": "я" * 20}).status_code == 201
+
+    def test_update_rejects_too_long_name(self, api, tamagochi):
+        assert api.put(TAMAGOCHI, {"name": "я" * 21}).status_code == 400
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    def test_update_ignores_id_in_body(self, api, tamagochi, stranger):
+        """Обновляется всегда тамагочи текущего пользователя, id из тела не важен."""
+        foreign = Tamagochi.objects.create(owner=stranger, name="Чужой")
+        api.put(TAMAGOCHI, {"id": foreign.id, "name": "Шарик"})
+        foreign.refresh_from_db()
+        tamagochi.refresh_from_db()
+        assert (foreign.name, tamagochi.name) == ("Чужой", "Шарик")
+
+    def test_can_create_again_after_delete(self, api, tamagochi):
+        api.delete(TAMAGOCHI)
+        assert api.post(TAMAGOCHI, {"name": "Новый"}).status_code == 201
+
+    def test_users_have_separate_tamagochi(self, api, tamagochi, stranger):
+        client = logged_in(stranger)
+        assert client.post(TAMAGOCHI, {"name": "Мурка", "type": "cat"}).status_code == 201
+        assert api.get(TAMAGOCHI).json()["name"] == "Бобик"
+        assert client.get(TAMAGOCHI).json()["name"] == "Мурка"
+
+    @pytest.mark.parametrize("body", ["null", "1", '"строка"'])
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_non_object_json_is_400(self, api, tamagochi, method, body):
+        assert api.send(method, TAMAGOCHI, body).status_code == 400
+
+    @pytest.mark.parametrize("method", ["post", "put"])
+    def test_writes_require_login(self, anon, method):
+        assert anon.send(method, TAMAGOCHI, {"name": "Бобик"}).status_code == 401
+        assert Tamagochi.objects.count() == 0
+
+    def test_logout_closes_access(self, owner, tamagochi):
+        client = logged_in(owner)
+        client.post(LOGOUT)
+        assert client.get(TAMAGOCHI).status_code == 401
+
+    @pytest.mark.parametrize("method", ["post", "put", "delete"])
+    def test_writes_require_csrf_token(self, owner, tamagochi, method):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
+        body = None if method == "delete" else {"name": "Шарик"}
+        assert ApiClient(client).send(method, TAMAGOCHI, body).status_code == 403
+        tamagochi.refresh_from_db()
+        assert tamagochi.name == "Бобик"
+
+    def test_unsupported_method_is_405(self, api):
+        assert api.send("patch", TAMAGOCHI, {}).status_code == 405
+
+
+class TestTamagochiModel:
+    def test_str(self, owner):
+        assert str(Tamagochi(owner=owner, name="Бобик")) == "Бобик"
+
+    def test_default_type_is_dog(self, owner):
+        assert Tamagochi.objects.create(owner=owner, name="Бобик").type == "dog"
+
+    def test_one_per_user_in_database(self, owner):
+        Tamagochi.objects.create(owner=owner, name="Первый")
+        with pytest.raises(IntegrityError), transaction.atomic():
+            Tamagochi.objects.create(owner=owner, name="Второй")
+
+    def test_deleting_user_removes_tamagochi(self, owner):
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        owner.delete()
+        assert not Tamagochi.objects.exists()
+
+    def test_deleting_pets_keeps_tamagochi(self, owner, pet):
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        pet.delete()
+        assert Tamagochi.objects.count() == 1
+
+    def test_accessible_from_user(self, owner):
+        pet = Tamagochi.objects.create(owner=owner, name="Бобик")
+        owner.refresh_from_db()
+        assert owner.tamagochi == pet
+
+
+class TestTamagochiPage:
+    def test_page_loads_widget_before_app(self, client):
+        page = client.get(MAIN, HTTP_ACCEPT="text/html").content.decode()
+        widget, helpers, app = (page.index(f"js/{name}.js") for name in ("pet-widget", "pet-app", "app"))
+        assert widget < helpers < app
+
+    def test_admin_lists_tamagochi(self, owner):
+        admin_user = get_user_model().objects.create(
+            username="admin", email="admin@example.com", is_staff=True, is_superuser=True,
+        )
+        Tamagochi.objects.create(owner=owner, name="Бобик")
+        client = Client()
+        client.force_login(admin_user)
+        response = client.get(reverse("admin:main_api_tamagochi_changelist"))
+        assert response.status_code == 200 and "Бобик" in response.content.decode()
+
+
+# ---------- Фото питомца ----------
+
+def photo_url(pet_id):
+    return reverse("pet_photo_point", args=[pet_id])
+
+
+def image_file(name="cat.png", size=(10, 10), fmt="PNG"):
+    buffer = io.BytesIO()
+    Image.new("RGB", size, "green").save(buffer, fmt)
+    return SimpleUploadedFile(name, buffer.getvalue(), content_type=f"image/{fmt.lower()}")
+
+
+class TestPetPhoto:
+    @pytest.fixture(autouse=True)
+    def media(self, settings, tmp_path):
+        """Файлы из тестов пишутся во временную папку, а не в настоящую media."""
+        settings.MEDIA_ROOT = tmp_path
+        return tmp_path
+
+    def upload(self, api, pet_id, file):
+        return api.client.post(photo_url(pet_id), {"photo": file}, HTTP_ACCEPT="application/json")
+
+    def test_route(self, pet):
+        assert photo_url(pet.id) == f"/user/pet_photo/{pet.id}"
+
+    def test_upload(self, api, pet, media):
+        response = self.upload(api, pet.id, image_file())
+        assert response.status_code == 200
+        pet.refresh_from_db()
+        assert pet.photo.name.startswith("pets/")
+        assert (media / pet.photo.name).exists()
+        assert response.json()["photo"] == pet.photo.url
+
+    def test_photo_url_is_in_pet_list(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        photo = api.get(MAIN).json()[0]["photo"]
+        assert photo.startswith("/media/pets/")
+
+    @pytest.mark.parametrize("fmt, name", [("JPEG", "cat.jpg"), ("GIF", "cat.gif"), ("WEBP", "cat.webp")])
+    def test_upload_other_formats(self, api, pet, fmt, name):
+        assert self.upload(api, pet.id, image_file(name, fmt=fmt)).status_code == 200
+
+    def test_replace_removes_old_file(self, api, pet, media):
+        self.upload(api, pet.id, image_file("first.png"))
+        pet.refresh_from_db()
+        old = media / pet.photo.name
+        self.upload(api, pet.id, image_file("second.png"))
+        pet.refresh_from_db()
+        assert not old.exists() and (media / pet.photo.name).exists()
+
+    def test_upload_keeps_other_fields(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        assert (pet.name, pet.species, pet.breed) == ("Барсик", "Кот", "Британский")
+
+    def test_upload_requires_file(self, api, pet):
+        response = api.client.post(photo_url(pet.id), {}, HTTP_ACCEPT="application/json")
+        assert response.status_code == 400 and response.json()["detail"] == "Выберите фото."
+
+    def test_upload_rejects_not_image(self, api, pet):
+        file = SimpleUploadedFile("cat.png", b"not an image", content_type="image/png")
+        response = self.upload(api, pet.id, file)
+        assert response.status_code == 400 and "изображение" in response.json()["detail"]
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_upload_rejects_too_big(self, api, pet, monkeypatch):
+        monkeypatch.setattr("main_api.views.PHOTO_MAX_SIZE", 10)
+        response = self.upload(api, pet.id, image_file())
+        assert response.status_code == 400 and "5 МБ" in response.json()["detail"]
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_failed_upload_keeps_old_photo(self, api, pet, media):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        old = pet.photo.name
+        self.upload(api, pet.id, SimpleUploadedFile("x.png", b"oops", content_type="image/png"))
+        pet.refresh_from_db()
+        assert pet.photo.name == old and (media / old).exists()
+
+    def test_delete(self, api, pet, media):
+        self.upload(api, pet.id, image_file())
+        pet.refresh_from_db()
+        path = media / pet.photo.name
+        response = api.delete(photo_url(pet.id))
+        assert response.status_code == 200 and response.json()["photo"] is None
+        pet.refresh_from_db()
+        assert not pet.photo and not path.exists()
+
+    def test_delete_without_photo_is_ok(self, api, pet):
+        assert api.delete(photo_url(pet.id)).json()["photo"] is None
+
+    def test_unknown_pet_is_404(self, api):
+        assert self.upload(api, 9999, image_file()).status_code == 404
+        assert api.delete(photo_url(9999)).status_code == 404
+
+    def test_foreign_pet_is_404(self, pet, stranger):
+        client = logged_in(stranger)
+        assert self.upload(client, pet.id, image_file()).status_code == 404
+        assert client.delete(photo_url(pet.id)).status_code == 404
+        pet.refresh_from_db()
+        assert not pet.photo
+
+    def test_requires_login(self, anon, pet):
+        assert self.upload(anon, pet.id, image_file()).status_code == 401
+        assert anon.delete(photo_url(pet.id)).status_code == 401
+
+    def test_requires_csrf_token(self, owner, pet):
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
+        assert self.upload(ApiClient(client), pet.id, image_file()).status_code == 403
+
+    @pytest.mark.parametrize("method", ["get", "put"])
+    def test_unsupported_method_is_405(self, api, pet, method):
+        assert api.send(method, photo_url(pet.id), {} if method == "put" else None).status_code == 405
+
+    def test_updating_pet_card_keeps_photo(self, api, pet):
+        self.upload(api, pet.id, image_file())
+        response = api.put(MAIN, {"id": pet.id, "name": "Барсик", "photo": None})
+        assert response.json()["photo"].startswith("/media/pets/")
+
+
+JUDGE = "/user/auth/judge"
+
+
+def judge(client, name="Иван Петров"):
+    return client.post(JUDGE, {"name": name})
+
+
+class TestJudgeLogin:
+    def test_route(self):
+        assert reverse("judge_login") == JUDGE
+
+    def test_judge_logs_in_by_name_without_password(self, anon):
+        response = judge(anon)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["username"] == "judge-иван-петров" and data["first_name"] == "Иван Петров"
+        assert data["is_staff"]
+        assert anon.get(ME).json()["username"] == "judge-иван-петров"
+
+    def test_judge_is_superuser_and_sees_admin(self, anon):
+        judge(anon)
+        user = get_user_model().objects.get(username="judge-иван-петров")
+        assert user.is_staff and user.is_superuser
+        assert not user.has_usable_password()
+        assert anon.client.get("/admin/").status_code == 200
+
+    def test_each_judge_gets_own_account(self, anon):
+        judge(anon, "Иван")
+        judge(ApiClient(Client()), "Мария")
+        names = get_user_model().objects.filter(is_superuser=True).values_list("username", flat=True)
+        assert sorted(names) == ["judge-иван", "judge-мария"]
+
+    def test_same_name_returns_same_account(self, anon):
+        first = judge(anon, "Иван").json()["id"]
+        assert judge(ApiClient(Client()), " иван ").json()["id"] == first
+
+    @pytest.mark.parametrize("name", ["", "   ", "!!!", "x" * 51])
+    def test_rejects_bad_name(self, anon, name):
+        assert judge(anon, name).status_code == 400
+        assert anon.get(ME).status_code == 401
+
+    def test_regular_user_with_same_username_is_not_promoted(self, anon):
+        get_user_model().objects.create_user(username="judge-иван", email="i@example.com", password=PASSWORD)
+        assert judge(anon, "Иван").status_code == 400
+        assert not get_user_model().objects.get(username="judge-иван").is_staff
+
+    def test_regular_user_is_not_staff(self, api):
+        assert api.get(ME).json()["is_staff"] is False
+
+    def test_disabled_by_setting(self, anon, settings):
+        settings.JUDGE_LOGIN_ENABLED = False
+        assert judge(anon).status_code == 403
+        assert anon.get(ME).status_code == 401

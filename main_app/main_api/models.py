@@ -198,3 +198,30 @@ class PushSubscription(models.Model):
 
     def __str__(self):
         return f"{self.user}: {self.endpoint[:50]}"
+
+
+class Tamagochi(models.Model):
+    """Виртуальный питомец, который гуляет по сайту. У пользователя не больше одного.
+    Положение на экране зависит от размера окна, поэтому хранится в браузере."""
+    TYPE_CHOICES = (
+        ("dog", "Собака"),
+        ("cat", "Кот"),
+    )
+
+    owner = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tamagochi",
+        verbose_name="Владелец",
+    )
+    name = models.CharField("Имя", max_length=20)
+    type = models.CharField("Тип", max_length=3, choices=TYPE_CHOICES, default="dog")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Тамагочи"
+        verbose_name_plural = "Тамагочи"
+
+    def __str__(self):
+        return str(self.name)
