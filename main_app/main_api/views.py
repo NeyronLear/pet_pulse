@@ -101,6 +101,15 @@ def _negative_weight(weight) -> bool:
         return False
 
 
+def _negative_weight(weight) -> bool:
+    """Модель не запрещает отрицательный вес, поэтому проверяем здесь.
+    Нечисловое значение отсеет full_clean()."""
+    try:
+        return weight not in ("", None) and Decimal(str(weight)) < 0
+    except InvalidOperation:
+        return False
+
+
 def _save(instance):
     """Проверяет модель (choices, длины, формат веса) и сохраняет.
     Возвращает ответ 400, если данные не прошли проверку, иначе None."""
