@@ -75,7 +75,7 @@ deploy:vm:
   script:
     # кладём на ВМ compose-файл и ключ сервис-аккаунта
     - $SSH $VM "mkdir -p ~/app/nginx"
-    - $SCP ./docker-compose.yml .scripts/setup_ssl.sh $SPIRIT_DOCKER_SA_KEY $VM:app/
+    - $SCP ./docker-compose.yml ./scripts/setup_ssl.sh $SPIRIT_DOCKER_SA_KEY $VM:app/
     - $SCP ./nginx/default.conf.template $VM:app/nginx/
     # .env не хранится в git — берём его из CI-переменной APP_ENV_FILE (тип File) в Spirit
     - |
