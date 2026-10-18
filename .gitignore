@@ -506,3 +506,4 @@ docs
 
 deploy*
 migrations*
+!/scripts/

@@ -75,8 +75,8 @@ deploy:vm:
   script:
     # кладём на ВМ compose-файл и ключ сервис-аккаунта
     - $SSH $VM "mkdir -p ~/app/nginx"
-    - $SCP ./docker-compose.yml $SPIRIT_DOCKER_SA_KEY $VM:app/
-    - $SCP ./nginx/default.conf $VM:app/nginx/
+    - $SCP ./docker-compose.yml .scripts/setup_ssl.sh $SPIRIT_DOCKER_SA_KEY $VM:app/
+    - $SCP ./nginx/default.conf.template $VM:app/nginx/
     # .env не хранится в git — берём его из CI-переменной APP_ENV_FILE (тип File) в Spirit
     - |
       if [ -z "$APP_ENV_FILE" ] || [ ! -f "$APP_ENV_FILE" ]; then
@@ -87,6 +87,7 @@ deploy:vm:
     # dp и docker запускаем через sudo: dp пишет helper в /usr/local/bin, это требует root
     - |
       $SSH $VM "cd ~/app &&
+        sudo sh setup_ssl.sh $DOMAIN $LE_EMAIL ~/app &&
         sudo dp auth service-acc --key-file $(basename $SPIRIT_DOCKER_SA_KEY) &&
         sudo dp auth configure-docker &&
         sudo IMAGE_NAME=$IMAGE_NAME docker compose pull &&
