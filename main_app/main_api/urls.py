@@ -11,7 +11,10 @@ from .views import (
     MedcardView,
     MeView,
     PasswordView,
+    PushKeyView,
+    PushSubscribeView,
     RegisterView,
+    service_worker,
     test,
 )
 
@@ -26,5 +29,8 @@ urlpatterns = [
     path("auth/logout", LogoutView.as_view(), name="logout"),
     path("auth/me", MeView.as_view(), name="me"),
     path("auth/password", PasswordView.as_view(), name="password"),
+    path("push/key", PushKeyView.as_view(), name="push_key"),
+    path("push/subscribe", PushSubscribeView.as_view(), name="push_subscribe"),
+    path("sw.js", service_worker, name="service_worker"),
     path("test", test, name="test"),
 ]

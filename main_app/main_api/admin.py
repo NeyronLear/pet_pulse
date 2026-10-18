@@ -2,7 +2,7 @@
 
 from django.contrib import admin
 
-from .models import User, Pet, MedCard, Food, History
+from .models import User, Pet, MedCard, Food, History, PushSubscription
 
 
 class AdminUser(admin.ModelAdmin):
@@ -113,10 +113,22 @@ class AdminHistory(admin.ModelAdmin):
         model = History
 
 
+class AdminPushSubscription(admin.ModelAdmin):
+    """Модель PushSubscription для админки"""
+
+    list_display = ["user", "endpoint", "created_at"]
+    search_fields = ["user__username", "endpoint"]
+    list_filter = ["created_at"]
+
+    class Meta:
+        model = PushSubscription
+
+
 admin.site.register(User, AdminUser)
 admin.site.register(Pet, AdminPet)
 admin.site.register(MedCard, AdminMedcard)
 admin.site.register(Food, AdminFood)
 admin.site.register(History, AdminHistory)
+admin.site.register(PushSubscription, AdminPushSubscription)
 
 admin.site.site_url = "http://127.0.0.1:8000/user"

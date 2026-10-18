@@ -2,12 +2,26 @@
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.validators import UnicodeUsernameValidator
 from django.db import models
+
+
+class UsernameValidator(UnicodeUsernameValidator):
+    """Как стандартный, но без «@»: LoginView по нему отличает почту от логина."""
+    regex = r"^[\w.+-]+\Z"
+    message = "Логин может содержать только буквы, цифры и символы . + - _."
 
 
 class User(AbstractUser):
     """Пользователь — владелец питомцев.
     Почта обязательна и уникальна: по ней тоже можно войти."""
+    username = models.CharField(
+        "Логин",
+        max_length=150,
+        unique=True,
+        validators=[UsernameValidator()],
+        error_messages={"unique": "Пользователь с таким логином уже существует."},
+    )
     email = models.EmailField(
         "Почта",
         unique=True,
@@ -161,3 +175,26 @@ class Food(models.Model):
 
     def __str__(self):
         return f"{self.pet.name}: {self.name}"
+
+
+class PushSubscription(models.Model):
+    """Подписка браузера на web push. У пользователя их может быть несколько:
+    по одной на каждый браузер или устройство."""
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="push_subscriptions",
+        verbose_name="Пользователь",
+    )
+    # адрес push-сервиса браузера, уникален для каждой подписки
+    endpoint = models.URLField("Адрес подписки", max_length=1000, unique=True)
+    p256dh = models.CharField("Ключ p256dh", max_length=200)
+    auth = models.CharField("Ключ auth", max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Push-подписка"
+        verbose_name_plural = "Push-подписки"
+
+    def __str__(self):
+        return f"{self.user}: {self.endpoint[:50]}"

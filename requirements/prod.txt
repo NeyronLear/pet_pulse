@@ -2,3 +2,4 @@ Django==6.1.2
 python-dotenv==1.2.4
 pillow==13.0.0
 gunicorn==26.2.0
+pywebpush==2.5.0

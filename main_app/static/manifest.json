@@ -1,0 +1,13 @@
+{
+  "name": "PetPulse",
+  "short_name": "PetPulse",
+  "start_url": "/user/",
+  "scope": "/user/",
+  "display": "standalone",
+  "lang": "ru",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/static/img/logo.jpeg", "sizes": "353x351", "type": "image/jpeg" }
+  ]
+}

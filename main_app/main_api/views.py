@@ -4,6 +4,7 @@ import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.contrib.auth import (
     authenticate,
     get_user_model,
@@ -20,7 +21,8 @@ from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from .models import Food, History, MedCard, Pet
+from .models import Food, History, MedCard, Pet, PushSubscription
+from .push import push_enabled
 
 
 def test(request: HttpRequest) -> HttpResponse:
@@ -577,3 +579,59 @@ class FoodView(LoginRequiredJsonMixin, View):
         item = get_object_or_404(Food, pk=item_id, pet_id=pet_id)
         item.delete()
         return JsonResponse(None, safe=False, status=204)
+
+
+# ---------- Push-уведомления (/push/...) ----------
+
+def service_worker(request: HttpRequest) -> HttpResponse:
+    """Service worker должен лежать не глубже страниц, которыми управляет:
+    из /static/js/ он не увидел бы /user/. Поэтому отдаём его по адресу /user/sw.js."""
+    response = render(request, "main_api/sw.js", content_type="application/javascript")
+    # браузер должен сразу видеть новую версию воркера
+    response["Cache-Control"] = "no-cache"
+    return response
+
+
+class PushKeyView(LoginRequiredJsonMixin, View):
+    """Публичный VAPID-ключ для pushManager.subscribe(). Пустой ключ — push выключен."""
+
+    def get(self, request: HttpRequest):
+        key = settings.VAPID_PUBLIC_KEY if push_enabled() else ""
+        return JsonResponse({"public_key": key})
+
+
+class PushSubscribeView(LoginRequiredJsonMixin, View):
+    """POST — сохранить подписку браузера (JSON из PushSubscription.toJSON()),
+    DELETE — удалить её по endpoint (при отписке и выходе из аккаунта)."""
+
+    def post(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        endpoint = data.get("endpoint") or ""
+        keys = data.get("keys") or {}
+        if not endpoint or not keys.get("p256dh") or not keys.get("auth"):
+            return bad_request("Неполные данные подписки.")
+
+        # endpoint уникален: если в этом браузере раньше входил другой
+        # пользователь, подписка переходит к текущему
+        subscription = PushSubscription.objects.filter(endpoint=endpoint).first()
+        created = subscription is None
+        if created:
+            subscription = PushSubscription(endpoint=endpoint)
+        subscription.user = request.user
+        subscription.p256dh = keys["p256dh"]
+        subscription.auth = keys["auth"]
+        return _save(subscription) or HttpResponse(status=201 if created else 204)
+
+    def delete(self, request: HttpRequest):
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+        PushSubscription.objects.filter(
+            user=request.user, endpoint=data.get("endpoint") or ""
+        ).delete()
+        return HttpResponse(status=204)

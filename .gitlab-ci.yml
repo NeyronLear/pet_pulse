@@ -91,5 +91,10 @@ deploy:vm:
         sudo dp auth configure-docker &&
         sudo IMAGE_NAME=$IMAGE_NAME docker compose pull &&
         sudo IMAGE_NAME=$IMAGE_NAME docker compose up -d"
+    # push-напоминания: раз в день в 06:00 UTC (09:00 МСК). Строку заменяем, а не дописываем,
+    # чтобы повторные деплои не плодили дубли. \$HOME раскрывается на ВМ, а не в CI
+    - |
+      $SSH $VM "(sudo crontab -l 2>/dev/null | grep -v send_reminders;
+        echo \"0 6 * * * cd \$HOME/app && docker compose exec -T server python manage.py send_reminders >> /var/log/petpulse-reminders.log 2>&1\") | sudo crontab -"
   environment:
     name: production

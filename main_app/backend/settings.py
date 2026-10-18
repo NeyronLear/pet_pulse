@@ -105,3 +105,11 @@ MAILERS = {
 }
 
 AUTH_USER_MODEL = "main_api.User"
+
+
+# Web push. Ключи создаёт команда: python manage.py generate_vapid_keys
+# Без ключей push выключен: кнопка подписки в интерфейсе не показывается.
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+# Контакт для push-сервисов браузеров на случай проблем с рассылкой
+VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")

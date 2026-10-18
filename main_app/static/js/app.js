@@ -282,6 +282,13 @@ const auth = {
   logout: () => request("POST", "/auth/logout"),
 };
 
+// Подписка браузера на push хранится на сервере — по ней main_api/push.py шлёт напоминания.
+const pushApi = {
+  key: () => request("GET", "/push/key"),
+  subscribe: (subscription) => request("POST", "/push/subscribe", subscription),
+  unsubscribe: (endpoint) => request("DELETE", "/push/subscribe", { endpoint }),
+};
+
 async function saveItem(bucket, item) {
   const saved = await api.save(bucket, item);
   const index = state[bucket].findIndex((x) => sameId(x.id, saved.id));
@@ -300,7 +307,14 @@ async function removeItem(bucket, id) {
 const petName = (id) => findById(state.pets, id)?.name ?? "Питомец не найден";
 
 // Состояние интерфейса, которое не нужно хранить в базе.
-const ui = { day: todayKey(), foodFilter: "Все", editing: null, user: null };
+// push — состояние уведомлений в этом браузере, ключи PUSH_STATUS.
+const ui = {
+  day: todayKey(),
+  foodFilter: "Все",
+  editing: null,
+  user: null,
+  push: "unsupported",
+};
 
 let toastTimer;
 function toast(message) {
@@ -682,6 +696,7 @@ function profileView() {
               </div>`)}
           </div>
         </section>
+        ${pushCard()}
         <section class="card">
           <div class="section-head">
             <h2>Безопасность</h2>
@@ -694,6 +709,34 @@ function profileView() {
         </section>
       </div>
     </div>`;
+}
+
+const PUSH_STATUS = {
+  unsupported:
+    "Браузер не поддерживает уведомления или сайт открыт не по HTTPS. На iPhone сначала добавьте сайт на экран «Домой».",
+  unavailable: "Уведомления пока не настроены на сервере.",
+  denied:
+    "Уведомления запрещены в настройках браузера. Разрешите их для этого сайта и обновите страницу.",
+  off: "Пришлём напоминание накануне и в день процедуры.",
+  on: "Уведомления включены в этом браузере.",
+};
+
+function pushCard() {
+  return html`
+    <section class="card">
+      <div class="section-head">
+        <h2>Уведомления</h2>
+      </div>
+      <p class="muted">${PUSH_STATUS[ui.push]}</p>
+      ${ui.push === "off" && html`
+        <div class="actions">
+          <button class="button" data-action="push-on">Включить уведомления</button>
+        </div>`}
+      ${ui.push === "on" && html`
+        <div class="actions">
+          <button class="button light" data-action="push-off">Выключить уведомления</button>
+        </div>`}
+    </section>`;
 }
 
 // ---------- Страницы и навигация ----------
@@ -1028,7 +1071,17 @@ const actions = {
   "auth-mode": ({ mode }) => setAuthMode(mode),
   "show-auth": () => showAuth(),
   "close-auth": hideAuth,
+  "push-on": async () => {
+    await enablePush();
+    render();
+  },
+  "push-off": async () => {
+    await disablePush();
+    render();
+    toast("Уведомления выключены");
+  },
   logout: async () => {
+    await forgetPushSubscription();
     await auth.logout();
     enterGuest();
   },
@@ -1102,6 +1155,89 @@ function exportCalendar(id) {
   toast("Файл календаря подготовлен. Импорт выполните в вашем календаре.");
 }
 
+// ---------- Push-уведомления ----------
+
+// Service worker и push работают только по HTTPS (или на localhost).
+// На iPhone PushManager появляется, только если сайт открыт с экрана «Домой».
+const pushSupported = () =>
+  window.isSecureContext && "serviceWorker" in navigator && "PushManager" in window;
+
+// Сервер отдаёт ключ в base64url, а pushManager.subscribe() ждёт байты.
+function base64UrlToBytes(text) {
+  const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  return Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+}
+
+let pushKey = "";
+
+// Регистрирует service worker и выясняет, подписан ли этот браузер.
+async function initPush() {
+  if (!pushSupported()) {
+    ui.push = "unsupported";
+    return;
+  }
+  pushKey = (await pushApi.key()).public_key;
+  if (!pushKey) {
+    ui.push = "unavailable";
+    return;
+  }
+  const registration = await navigator.serviceWorker.register(`${API_ROOT}/sw.js`);
+  const subscription = await registration.pushManager.getSubscription();
+  if (Notification.permission === "denied") {
+    ui.push = "denied";
+  } else if (subscription) {
+    // сервер мог не получить подписку при включении (сбой сети) — сохраняем повторно
+    await pushApi.subscribe(subscription.toJSON());
+    ui.push = "on";
+  } else {
+    ui.push = "off";
+  }
+}
+
+// Разрешение на уведомления браузер даёт спросить только по действию пользователя (клику).
+async function enablePush() {
+  const permission = await Notification.requestPermission();
+  if (permission !== "granted") {
+    ui.push = permission === "denied" ? "denied" : "off";
+    toast("Браузер не разрешил уведомления.");
+    return;
+  }
+  const registration = await navigator.serviceWorker.ready;
+  const subscription = await registration.pushManager.subscribe({
+    userVisibleOnly: true, // каждое push-сообщение обязано показывать уведомление
+    applicationServerKey: base64UrlToBytes(pushKey),
+  });
+  await pushApi.subscribe(subscription.toJSON());
+  ui.push = "on";
+  toast("Уведомления включены");
+}
+
+async function disablePush() {
+  const subscription = await currentPushSubscription();
+  if (subscription) {
+    await pushApi.unsubscribe(subscription.endpoint);
+    await subscription.unsubscribe();
+  }
+  ui.push = "off";
+}
+
+async function currentPushSubscription() {
+  if (!pushSupported()) return null;
+  const registration = await navigator.serviceWorker.getRegistration(`${API_ROOT}/`);
+  return registration ? registration.pushManager.getSubscription() : null;
+}
+
+// При выходе полностью отписываем браузер, чтобы напоминания не получал следующий,
+// кто войдёт с этого устройства. Ошибка здесь не должна мешать выходу.
+async function forgetPushSubscription() {
+  try {
+    await disablePush();
+  } catch (error) {
+    console.error(error);
+  }
+}
+
 // ---------- Вход, регистрация и выход ----------
 
 // Гостю страница открыта (пустая, без данных), а вход и регистрация показываются
@@ -1168,6 +1304,8 @@ async function startApp(user) {
     if (isUnauthorized(error)) return;
     toast("Не удалось загрузить данные.");
   }
+  // без уведомлений приложение работает как обычно, поэтому ошибку только логируем
+  await initPush().catch(console.error);
   render();
 }
 

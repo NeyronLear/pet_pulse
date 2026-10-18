@@ -68,10 +68,31 @@ def api(owner):
 
 @pytest.fixture
 def anon():
+def owner():
+    # без пароля: хеширование паролей в тестах только замедляет прогон
+    return get_user_model().objects.create(username="owner", email="owner@example.com")
+
+
+def logged_in(user) -> ApiClient:
+    client = Client()
+    client.force_login(user)
+    return ApiClient(client)
+
+
+@pytest.fixture
+def api(owner):
+    """Клиент, вошедший как владелец питомцев из фикстур."""
+    return logged_in(owner)
+
+
+@pytest.fixture
+def anon():
     return ApiClient(Client())
 
 
 @pytest.fixture
+def stranger():
+    return get_user_model().objects.create(username="stranger", email="stranger@example.com")
 def stranger():
     return get_user_model().objects.create(username="stranger", email="stranger@example.com")
 
@@ -502,7 +523,9 @@ class TestSecurity:
         assert Pet.objects.count() == 1 and History.objects.count() == 1
 
     def test_write_with_valid_token_passes(self, owner):
+    def test_write_with_valid_token_passes(self, owner):
         client = Client(enforce_csrf_checks=True)
+        client.force_login(owner)
         client.force_login(owner)
         client.get(MAIN, HTTP_ACCEPT="text/html")  # выдаёт csrftoken
         response = client.post(
@@ -601,6 +624,7 @@ class TestAuth:
         {"username": ""}, {"email": ""}, {"password": ""},
         {"email": "не-почта"},
         {"username": "с пробелом"},
+        {"username": "anna@home"},  # «@» — признак почты при входе
         {"password": "12345678"},  # слишком простой
         {"password": "short"},
         {"password": "anna@example.com"},  # похож на почту
@@ -698,6 +722,7 @@ class TestProfile:
 
     @pytest.mark.parametrize("overrides", [
         {"username": ""}, {"email": ""}, {"username": "с пробелом"}, {"email": "не-почта"},
+        {"username": "anna@home"},
         {"phone": "1" * 21},
     ])
     def test_update_rejects_invalid(self, api, owner, overrides):
