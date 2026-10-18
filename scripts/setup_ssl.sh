@@ -1,7 +1,9 @@
 #!/bin/sh
 # usage: setup_ssl.sh DOMAIN EMAIL APP_DIR   (запускать от root)
 set -eu
-DOMAIN=$1; EMAIL=$2; APP_DIR=$3
+DOMAIN=${1:?не задан DOMAIN (CI-переменная DOMAIN)}
+EMAIL=${2:?не задан EMAIL (CI-переменная LE_EMAIL)}
+APP_DIR=${3:?не задан APP_DIR}
 
 command -v certbot >/dev/null || { apt-get update -qq && apt-get install -y -qq certbot; }
 

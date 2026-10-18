@@ -83,6 +83,10 @@ deploy:vm:
         echo "Создайте CI-переменную APP_ENV_FILE (тип File) с содержимым .env"; exit 1
       fi
     - $SCP $APP_ENV_FILE $VM:app/.env
+    - |
+      if [ -z "$DOMAIN" ] || [ -z "$LE_EMAIL" ]; then
+        echo "Создайте CI-переменные DOMAIN (FQDN ВМ) и LE_EMAIL (почта для Let's Encrypt) в Spirit"; exit 1
+      fi
     # на ВМ: входим в registry, скачиваем новый образ и перезапускаем.
     # dp и docker запускаем через sudo: dp пишет helper в /usr/local/bin, это требует root
     - |
