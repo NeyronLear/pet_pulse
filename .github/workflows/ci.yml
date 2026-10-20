@@ -43,6 +43,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      - name: Set lower case owner and repository name
+        run: |
+          IMAGE_RAW="ghcr.io/${{ github.repository }}:latest"
+          IMAGE_LC=$(echo "$IMAGE_RAW" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=$IMAGE_LC" >> $GITHUB_ENV
+
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
@@ -91,6 +97,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
+      - name: Set lower case owner and repository name
+        run: |
+          IMAGE_RAW="ghcr.io/${{ github.repository }}:latest"
+          IMAGE_LC=$(echo "$IMAGE_RAW" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=$IMAGE_LC" >> $GITHUB_ENV
 
       - name: Deploy to Production Server via SSH
         run: |
