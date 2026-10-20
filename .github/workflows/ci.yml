@@ -53,7 +53,7 @@ jobs:
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Build Docker Image
-        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+        run: docker build -t ${{ env.IMAGE_NAME }} .
 
       - name: Verify Container Health (Smoke Test)
         run: |
