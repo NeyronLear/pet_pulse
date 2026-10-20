@@ -8,6 +8,7 @@ from django.db import models
 
 class UsernameValidator(UnicodeUsernameValidator):
     """Как стандартный, но без «@»: LoginView по нему отличает почту от логина."""
+
     regex = r"^[\w.+-]+\Z"
     message = "Логин может содержать только буквы, цифры и символы . + - _."
 
@@ -15,6 +16,7 @@ class UsernameValidator(UnicodeUsernameValidator):
 class User(AbstractUser):
     """Пользователь — владелец питомцев.
     Почта обязательна и уникальна: по ней тоже можно войти."""
+
     username = models.CharField(
         "Логин",
         max_length=150,
@@ -40,6 +42,7 @@ class User(AbstractUser):
 
 class Pet(models.Model):
     """Карточка питомца."""
+
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -65,6 +68,7 @@ class Pet(models.Model):
 
 class MedCard(models.Model):
     """Медицинская карта питомца."""
+
     pet = models.OneToOneField(
         Pet,
         on_delete=models.CASCADE,
@@ -93,6 +97,7 @@ class MedCard(models.Model):
 
 class History(models.Model):
     """История здоровья / процедур / напоминаний."""
+
     TYPE_CHOICES = (
         ("Вакцинация", "Вакцинация"),
         ("Обработка", "Обработка от паразитов"),
@@ -134,6 +139,7 @@ class History(models.Model):
 
 class Food(models.Model):
     """Запись о питании."""
+
     STATUS_CHOICES = (
         ("Наблюдать", "Наблюдать"),
         ("Подошло", "Подошло"),
@@ -180,6 +186,7 @@ class Food(models.Model):
 class PushSubscription(models.Model):
     """Подписка браузера на web push. У пользователя их может быть несколько:
     по одной на каждый браузер или устройство."""
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -203,6 +210,7 @@ class PushSubscription(models.Model):
 class Tamagochi(models.Model):
     """Виртуальный питомец, который гуляет по сайту. У пользователя не больше одного.
     Положение на экране зависит от размера окна, поэтому хранится в браузере."""
+
     TYPE_CHOICES = (
         ("dog", "Собака"),
         ("cat", "Кот"),
