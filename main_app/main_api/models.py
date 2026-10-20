@@ -225,9 +225,3 @@ class Tamagochi(models.Model):
 
     def __str__(self):
         return str(self.name)
-
-class Test(models.Model):
-
-    huiSgackom = models.TextField(name="Хуй с гаком")
-    def __str__(self):
-        return str(self.huiSgackom)
