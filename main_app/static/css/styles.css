@@ -440,6 +440,22 @@ p {
   color: var(--muted);
   margin: 0;
 }
+.mini-pet .pet-note {
+  color: var(--green);
+  font-weight: bold;
+  letter-spacing: 0.2px;
+}
+/* График динамики веса: рисуется на canvas после каждой перерисовки страницы */
+.weight-chart {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin: 12px 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
 .tip {
   background: var(--yellow);
   padding: 23px;
