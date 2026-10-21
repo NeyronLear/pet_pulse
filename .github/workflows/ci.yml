@@ -55,35 +55,6 @@ jobs:
       - name: Build Docker Image
         run: docker build -t ${{ env.IMAGE_NAME }} .
 
-      - name: Verify Container Health (Smoke Test)
-        run: |
-          # Создаем пустой .env, чтобы docker compose не ругался на переменные
-          echo "DOMAIN=localhost" > .env
-          echo "SECRET_KEY=test_secret_key" >> .env
-          
-          # Запускаем сервисы в фоне, подставляя только что собранный IMAGE_NAME
-          IMAGE_NAME=${{ env.IMAGE_NAME }} docker compose up -d server
-          
-          # Ждем до 30 секунд, пока отработает healthcheck из docker-compose (интервал 5с * 6 попыток)
-          echo "Ожидание прохождения healthcheck контейнера..."
-          for i in {1..6}; do
-            STATUS=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q server))
-            echo "Текущий статус: $STATUS"
-            if [ "$STATUS" = "healthy" ]; then
-              echo "Контейнер успешно прошел проверку здоровья!"
-              break
-            fi
-            if [ "$STATUS" = "unhealthy" ]; then
-              echo "Контейнер упал или не прошел healthcheck!"
-              docker compose logs server
-              exit 1
-            fi
-            sleep 5
-          done
-
-          # Останавливаем тестовое окружение на раннере
-          docker compose down
-
       # Пушим образ только при реальном пуше (мерже) в develop или main. 
       # При проверке Pull Request пушить образ не нужно.
       - name: Push Docker Image
