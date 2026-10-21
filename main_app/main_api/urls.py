@@ -22,7 +22,6 @@ from .views import (
     test,
 )
 
-
 urlpatterns = [
     path("", MainView.as_view(), name="main"),
     path("pet_photo/<int:pet_id>", PetPhotoView.as_view(), name="pet_photo_point"),

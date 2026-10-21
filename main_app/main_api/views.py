@@ -35,6 +35,7 @@ def test(request: HttpRequest) -> HttpResponse:
 
 # ---------- Общие утилиты ----------
 
+
 def _wants_json(request: HttpRequest) -> bool:
     """fetch() из script.js всегда шлёт Accept: application/json,
     обычная навигация браузера — нет."""
@@ -121,6 +122,7 @@ def _save(instance):
 
 # ---------- Сериализация моделей в JSON, который ждёт script.js ----------
 
+
 def _iso(value):
     return value.isoformat() if value is not None else None
 
@@ -194,6 +196,7 @@ def weight_to_json(entry: WeightEntry) -> dict:
 
 # ---------- Главная страница + список питомцев (RESOURCES.pets.path === "/") ----------
 
+
 @method_decorator(ensure_csrf_cookie, name="get")
 class MainView(View):
     """GET отдаёт index.html обычному браузеру и список питомцев — fetch'у.
@@ -262,6 +265,7 @@ PHOTO_MAX_SIZE = 5 * 1024 * 1024
 
 class PetPhotoForm(forms.Form):
     """ImageField через Pillow проверяет, что файл — действительно картинка."""
+
     photo = forms.ImageField(
         error_messages={
             "required": "Выберите фото.",
@@ -300,6 +304,7 @@ class PetPhotoView(LoginRequiredJsonMixin, View):
 
 
 # ---------- Регистрация, вход и выход (/auth/...) ----------
+
 
 def user_to_json(user) -> dict:
     return {
@@ -476,6 +481,7 @@ class PasswordView(LoginRequiredJsonMixin, View):
 
 # ---------- История / напоминания (RESOURCES.history.path === "/history/<pet_id>") ----------
 
+
 class HistoryView(LoginRequiredJsonMixin, View):
     """CRUD записей History одного питомца.
     done=False — напоминание, done=True — запись здоровья (см. state в script.js)."""
@@ -550,6 +556,7 @@ class HistoryView(LoginRequiredJsonMixin, View):
 
 # ---------- Медкарта (RESOURCES.medCards.path === "/med_card/<pet_id>") ----------
 
+
 class MedcardView(LoginRequiredJsonMixin, View):
     """У питомца не более одной медкарты (OneToOne). Отсутствие карты — это 404,
     script.js ловит такую ошибку через ignoreNotFound и не считает её сбоем."""
@@ -599,7 +606,7 @@ class MedcardView(LoginRequiredJsonMixin, View):
         weight = data.get("weight")
         if _negative_weight(weight):
             return bad_request("Вес не может быть отрицательным.")
-        card.weight =weight if weight not in ("", None) else None
+        card.weight = weight if weight not in ("", None) else None
         card.allergies = data.get("allergies") or ""
         card.chronic_conditions = data.get("chronic_conditions") or ""
         card.notes = data.get("notes") or ""
@@ -691,6 +698,7 @@ class WeightView(LoginRequiredJsonMixin, View):
 
 # ---------- Питание (RESOURCES.food.path === "/food/<pet_id>") ----------
 
+
 class FoodView(LoginRequiredJsonMixin, View):
     """CRUD записей Food одного питомца."""
 
@@ -760,6 +768,7 @@ class FoodView(LoginRequiredJsonMixin, View):
 
 # ---------- Тамагочи (tamagochi.path === "/tamagochi") ----------
 
+
 class TamagochiView(LoginRequiredJsonMixin, View):
     """У пользователя не более одного тамагочи (OneToOne), поэтому id не нужен.
     Отсутствие тамагочи — это 404, как у медкарты."""
@@ -806,6 +815,7 @@ class TamagochiView(LoginRequiredJsonMixin, View):
 
 
 # ---------- Push-уведомления (/push/...) ----------
+
 
 def service_worker(request: HttpRequest) -> HttpResponse:
     """Service worker должен лежать не глубже страниц, которыми управляет:

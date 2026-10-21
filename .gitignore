@@ -502,6 +502,7 @@ $RECYCLE.BIN/
 
 .claude
 .kilo
+.vscode
 docs
 
 deploy*

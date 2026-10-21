@@ -123,6 +123,7 @@ class AdminPushSubscription(admin.ModelAdmin):
     class Meta:
         model = PushSubscription
 
+
 class AdminTamagochi(admin.ModelAdmin):
     """Модель Tamagochi для админки"""
 
@@ -132,6 +133,7 @@ class AdminTamagochi(admin.ModelAdmin):
 
     class Meta:
         model = Tamagochi
+
 
 admin.site.register(Tamagochi, AdminTamagochi)
 admin.site.register(User, AdminUser)
