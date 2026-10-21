@@ -87,6 +87,8 @@ export async function loadApp({ respond = () => [401, { detail: "Требует�
     state, ui, RESOURCES, EDITORS, api, request,
     petAvatar, petTag, photoField, miniPet, petCard, medCard,
     healthRecord, foodCard, eventRow, replaceItem, PHOTO_MAX_SIZE,
+    petAge, lastWeight, nextEventFor, formatWeight,
+    drawLineChart, drawWeightCharts, reloadWeights,
   })`, context);
   return { app, fetchCalls, $: (selector) => document.querySelector(selector) };
 }

@@ -15,10 +15,15 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "fake")
 # Кнопка «Вход для жюри» хакатона (без пароля, с правами админа); 0 — выключить
 JUDGE_LOGIN_ENABLED = os.environ.get("JUDGE_LOGIN_ENABLED", "1") != "0"
 
-CSRF_TRUSTED_ORIGINS = [f"https://{os.environ.get("FQDN")}"]
+# Задан FQDN — Prod за nginx по HTTPS (flag Secure у cookie обязателен).
+# Не задан — локальный запуск по HTTP: с Secure-флагом браузер
+# отбрасывает sessionid/csrftoken и сразу после логина приходит 401.
+HTTPS = bool(os.environ.get("FQDN"))
+
+CSRF_TRUSTED_ORIGINS = [f"https://{os.environ.get("FQDN")}"] if HTTPS else []
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = HTTPS
+CSRF_COOKIE_SECURE = HTTPS
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get("DEBUG", 'true').lower() in ['true', '1', 'yes']

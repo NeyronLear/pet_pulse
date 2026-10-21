@@ -17,7 +17,7 @@ from django.test import Client
 from django.urls import reverse
 from PIL import Image
 
-from main_api.models import Food, History, MedCard, Pet, Tamagochi
+from main_api.models import Food, History, MedCard, Pet, Tamagochi, WeightEntry
 
 pytestmark = pytest.mark.django_db
 
@@ -123,6 +123,10 @@ def card_url(pet_id):
     return reverse("med_card_point", args=[pet_id])
 
 
+def weight_url(pet_id):
+    return reverse("weight_point", args=[pet_id])
+
+
 def history_body(pet, **overrides):
     body = {
         "pet": pet.id, "type": "Обработка", "title": "Таблетка",
@@ -143,6 +147,7 @@ def test_routes_are_mounted_under_user_prefix(pet):
     assert history_url(pet.id) == f"/user/history/{pet.id}"
     assert food_url(pet.id) == f"/user/food/{pet.id}"
     assert card_url(pet.id) == f"/user/med_card/{pet.id}"
+    assert weight_url(pet.id) == f"/user/weight/{pet.id}"
 
 
 def test_healthcheck(client):
@@ -484,6 +489,133 @@ class TestMedCard:
         assert MedCard.objects.count() == 1
 
 
+# ---------- Замеры веса ----------
+
+@pytest.fixture
+def weight(pet):
+    return WeightEntry.objects.create(pet=pet, weight="4.80", date=date(2026, 10, 1))
+
+
+class TestWeight:
+    def test_list_and_shape(self, api, pet, weight):
+        assert api.get(weight_url(pet.id)).json() == [
+            {"id": weight.id, "pet": pet.id, "weight": "4.80", "date": "2026-10-01"},
+        ]
+
+    def test_list_ordered_by_date(self, api, pet):
+        WeightEntry.objects.create(pet=pet, weight="5.10", date=date(2026, 10, 5))
+        WeightEntry.objects.create(pet=pet, weight="4.40", date=date(2026, 9, 1))
+        data = api.get(weight_url(pet.id)).json()
+        assert [row["weight"] for row in data] == ["4.40", "5.10"]
+
+    def test_list_only_own_pet(self, api, pet, other_pet, weight):
+        WeightEntry.objects.create(pet=other_pet, weight="9.00", date=date(2026, 10, 2))
+        data = api.get(weight_url(pet.id)).json()
+        assert [row["id"] for row in data] == [weight.id]
+
+    def test_unknown_pet_is_404(self, api):
+        url = weight_url(9999)
+        assert api.get(url).status_code == 404
+        assert api.post(url, {}).status_code == 404
+        assert api.put(url, {"id": 1}).status_code == 404
+        assert api.delete(url).status_code == 404
+
+    def test_create(self, api, pet):
+        response = api.post(weight_url(pet.id), {"weight": "4.95", "date": "2026-10-20"})
+        assert response.status_code == 201
+        data = response.json()
+        assert data["pet"] == pet.id and data["weight"] == "4.95"
+        assert WeightEntry.objects.count() == 1
+
+    def test_create_accepts_number_weight(self, api, pet):
+        response = api.post(weight_url(pet.id), {"weight": 4.95, "date": "2026-10-20"})
+        assert response.json()["weight"] == "4.95"
+
+    @pytest.mark.parametrize("overrides", [
+        {"weight": ""}, {"weight": None}, {"weight": "много"},
+        {"weight": "-1"}, {"weight": "123456"},
+        {"date": ""}, {"date": None}, {"date": "2026-02-30"}, {"date": "завтра"},
+    ])
+    def test_create_rejects_invalid(self, api, pet, overrides):
+        body = {"weight": "4.95", "date": "2026-10-20", **overrides}
+        assert api.post(weight_url(pet.id), body).status_code == 400
+        assert WeightEntry.objects.count() == 0
+
+    def test_create_rejects_invalid_json(self, api, pet):
+        assert api.post(weight_url(pet.id), "{").status_code == 400
+
+    def test_update(self, api, pet, weight):
+        response = api.put(weight_url(pet.id), {"id": weight.id, "weight": "5.20", "date": "2026-10-25"})
+        assert response.status_code == 200
+        weight.refresh_from_db()
+        assert str(weight.weight) == "5.20" and weight.date == date(2026, 10, 25)
+
+    @pytest.mark.parametrize("overrides", [
+        {"weight": ""}, {"weight": "-2"}, {"weight": "abc"}, {"date": "2026-02-30"},
+    ])
+    def test_update_rejects_invalid_and_keeps_data(self, api, pet, weight, overrides):
+        body = {"id": weight.id, "weight": "4.95", "date": "2026-10-20", **overrides}
+        assert api.put(weight_url(pet.id), body).status_code == 400
+        weight.refresh_from_db()
+        assert str(weight.weight) == "4.80"
+
+    def test_update_foreign_or_unknown_is_404(self, api, pet, other_pet, weight):
+        body = {"id": weight.id, "weight": "5.20", "date": "2026-10-25"}
+        assert api.put(weight_url(other_pet.id), body).status_code == 404
+        assert api.put(weight_url(pet.id), {**body, "id": 9999}).status_code == 404
+
+    def test_delete(self, api, pet, weight):
+        assert api.delete(f"{weight_url(pet.id)}?id={weight.id}").status_code == 204
+        assert not WeightEntry.objects.filter(pk=weight.id).exists()
+
+    def test_delete_requires_id(self, api, pet, weight):
+        assert api.delete(weight_url(pet.id)).status_code == 400
+        assert WeightEntry.objects.filter(pk=weight.id).exists()
+
+    def test_delete_foreign_or_unknown_is_404(self, api, pet, other_pet, weight):
+        assert api.delete(f"{weight_url(other_pet.id)}?id={weight.id}").status_code == 404
+        assert api.delete(f"{weight_url(pet.id)}?id=9999").status_code == 404
+        assert WeightEntry.objects.count() == 1
+
+    def test_requires_login(self, anon, pet, weight):
+        url = weight_url(pet.id)
+        assert anon.get(url).status_code == 401
+        assert anon.post(url, {}).status_code == 401
+        assert anon.put(url, {}).status_code == 401
+        assert anon.delete(url).status_code == 401
+
+
+# ---------- Вес в медкарте попадает на график ----------
+
+class TestMedcardWeightSync:
+    def test_create_card_with_weight_makes_entry_for_today(self, api, pet):
+        assert api.post(card_url(pet.id), {"weight": "4.30", "allergies": "Нет"}).status_code == 201
+        entry = WeightEntry.objects.get(pet=pet)
+        assert str(entry.weight) == "4.30" and entry.date == date.today()
+
+    def test_create_card_without_weight_makes_no_entry(self, api, pet):
+        assert api.post(card_url(pet.id), {"weight": ""}).status_code == 201
+        assert WeightEntry.objects.count() == 0
+
+    def test_update_card_rewrites_today_entry(self, api, pet, card):
+        WeightEntry.objects.create(pet=pet, weight="4.80", date=date.today())
+        older = WeightEntry.objects.create(pet=pet, weight="4.10", date=date(2026, 9, 1))
+        assert api.put(card_url(pet.id), {"id": card.id, "weight": "5.10"}).status_code == 200
+        entries = WeightEntry.objects.filter(pet=pet)
+        assert entries.count() == 2
+        assert str(entries.get(pk=older.id).weight) == "4.10"  # старые замеры не трогаем
+        assert str(WeightEntry.objects.get(date=date.today()).weight) == "5.10"
+
+    def test_update_card_without_weight_makes_no_entry(self, api, pet, card):
+        assert api.put(card_url(pet.id), {"id": card.id, "weight": None}).status_code == 200
+        assert WeightEntry.objects.count() == 0
+
+    def test_simple_entries_do_not_touch_medcard(self, api, pet, card):
+        api.post(weight_url(pet.id), {"weight": "4.95", "date": "2026-10-20"})
+        card.refresh_from_db()
+        assert str(card.weight) == "4.80" and WeightEntry.objects.count() == 1
+
+
 # ---------- Тамагочи ----------
 
 TAMAGOCHI = "/user/tamagochi"
@@ -570,8 +702,12 @@ class TestTamagochi:
 # ---------- Каскады ----------
 
 def test_deleting_pet_removes_related_records(pet, record, food, card):
+    WeightEntry.objects.create(pet=pet, weight="4.80", date=date(2026, 10, 1))
     pet.delete()
-    assert not (History.objects.exists() or Food.objects.exists() or MedCard.objects.exists())
+    assert not (
+        History.objects.exists() or Food.objects.exists()
+        or MedCard.objects.exists() or WeightEntry.objects.exists()
+    )
 
 
 # ---------- CSRF и методы ----------
@@ -620,7 +756,7 @@ class TestAccess:
         pet.refresh_from_db()
         assert pet.name == "Барсик" and Pet.objects.count() == 1
 
-    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point"])
+    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point", "weight_point"])
     def test_pet_resources_require_login(self, anon, pet, url_name):
         assert anon.get(reverse(url_name, args=[pet.id])).status_code == 401
 
@@ -634,7 +770,7 @@ class TestAccess:
         pet.refresh_from_db()
         assert pet.name == "Барсик"
 
-    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point"])
+    @pytest.mark.parametrize("url_name", ["history_point", "food_point", "med_card_point", "weight_point"])
     def test_foreign_pet_resources_are_404(self, pet, record, food, card, stranger, url_name):
         client = logged_in(stranger)
         url = reverse(url_name, args=[pet.id])
@@ -642,6 +778,7 @@ class TestAccess:
         assert client.post(url, {"title": "x", "name": "x", "date": "2026-10-17"}).status_code == 404
         assert client.delete(f"{url}?id=1").status_code == 404
         assert History.objects.count() == Food.objects.count() == MedCard.objects.count() == 1
+        assert WeightEntry.objects.count() == 0
 
 
 # ---------- Регистрация, вход и выход ----------

@@ -91,6 +91,27 @@ class MedCard(models.Model):
         return f"Медкарта: {self.pet.name}"
 
 
+class WeightEntry(models.Model):
+    """Замер веса питомца: точки для графика динамики веса в медкарте."""
+    pet = models.ForeignKey(
+        Pet,
+        on_delete=models.CASCADE,
+        related_name="weight_entries",
+        verbose_name="Питомец",
+    )
+    weight = models.DecimalField("Вес, кг", max_digits=6, decimal_places=2)
+    date = models.DateField("Дата замера")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["date", "id"]
+        verbose_name = "Замер веса"
+        verbose_name_plural = "Замеры веса"
+
+    def __str__(self):
+        return f"{self.pet.name}: {self.weight} кг"
+
+
 class History(models.Model):
     """История здоровья / процедур / напоминаний."""
     TYPE_CHOICES = (
