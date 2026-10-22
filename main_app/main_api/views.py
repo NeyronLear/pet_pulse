@@ -260,7 +260,7 @@ class MainView(View):
 
 # ---------- Фото питомца (/pet_photo/<pet_id>) ----------
 
-PHOTO_MAX_SIZE = 5 * 1024 * 1024
+PHOTO_MAX_SIZE = 10 * 1024 * 1024 # 10 МБ
 
 
 class PetPhotoForm(forms.Form):
