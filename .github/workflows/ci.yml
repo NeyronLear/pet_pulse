@@ -90,6 +90,7 @@ jobs:
           # 2. Копирование необходимых конфигурационных файлов, шаблонов Nginx и скриптов SSL
           scp ./docker-compose.yml $SERVER:~/app/docker-compose.yml
           scp ./scripts/setup_ssl.sh $SERVER:~/app/setup_ssl.sh
+          scp ./scripts/ensure_superuser.py $SERVER:~/app/ensure_superuser.py
           scp -r ./nginx/ $SERVER:~/app/
           
           # 3. Полный цикл развертывания, генерации SSL и настройки крона
@@ -110,20 +111,13 @@ jobs:
             # Загрузка нового образа, перезапуск контейнеров и чистка мусора
             sudo IMAGE_NAME=${{ env.IMAGE_NAME }} docker compose pull
             sudo IMAGE_NAME=${{ env.IMAGE_NAME }} docker compose up -d --remove-orphans
-            sudo DJANGO_SUPERUSER_USERNAME=${{ secrets.SUPERUSER_USERNAME }} \
-                 DJANGO_SUPERUSER_EMAIL=${{ secrets.SUPERUSER_EMAIL }} \
-                 DJANGO_SUPERUSER_PASSWORD=${{ secrets.SUPERUSER_PASSWORD }} \
-                 docker compose exec -T server sh -c '\
-                   python manage.py shell -c "
-            from django.contrib.auth import get_user_model
-            U = get_user_model()
-            u, created = U.objects.get_or_create(
-                username=\"$DJANGO_SUPERUSER_USERNAME\",
-                defaults={\"email\": \"$DJANGO_SUPERUSER_EMAIL\"})
-            u.set_password(\"$DJANGO_SUPERUSER_PASSWORD\")
-            u.is_staff = u.is_superuser = True
-            u.save()
-            print(\"superuser ok\")"'
+            # Идемпотентное создание суперюзера из секретов: скрипт подаётся
+            # на stdin manage.py shell, переменные прокидываются через -e
+            sudo docker compose exec -T \
+              -e DJANGO_SUPERUSER_USERNAME=${{ secrets.SUPERUSER_USERNAME }} \
+              -e DJANGO_SUPERUSER_EMAIL=${{ secrets.SUPERUSER_EMAIL }} \
+              -e DJANGO_SUPERUSER_PASSWORD=${{ secrets.SUPERUSER_PASSWORD }} \
+              server python manage.py shell < ensure_superuser.py
             sudo docker image prune -f
             
             # Восстановление Крон-задачи для рассылки напоминаний Django (каждый день в 06:00 UTC)
