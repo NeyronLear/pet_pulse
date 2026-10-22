@@ -1050,7 +1050,7 @@ const textareaField = (name, label, value = "") => html`
 const noteField = () => textareaField("note", "Наблюдения и заметки");
 
 // Ограничение сервера (PHOTO_MAX_SIZE во views.py) проверяем заранее, чтобы не гонять большой файл зря.
-const PHOTO_MAX_SIZE = 5 * 1024 * 1024;
+const PHOTO_MAX_SIZE = 10 * 1024 * 1024;
 
 const photoField = (pet) => html`
   <div class="field">
@@ -1106,7 +1106,7 @@ const EDITORS = {
     check: (values, form) => {
       const file = form.elements.photo.files[0];
       if (file && !file.type.startsWith("image/")) return "Выберите файл с картинкой.";
-      if (file?.size > PHOTO_MAX_SIZE) return "Фото должно быть не больше 5 МБ.";
+      if (file?.size > PHOTO_MAX_SIZE) return "Фото должно быть не больше 10 МБ.";
       return "";
     },
     afterSave: async (pet, form) => {
