@@ -129,9 +129,9 @@ describe("проверка фото до отправки", () => {
     assert.equal(check(new File(["x"], "cat.txt", { type: "text/plain" })), "Выберите файл с картинкой.");
   });
 
-  test("больше 5 МБ", () => {
+  test("больше 10 МБ", () => {
     const big = { type: "image/jpeg", size: app.PHOTO_MAX_SIZE + 1 };
-    assert.equal(check(big), "Фото должно быть не больше 5 МБ.");
+    assert.equal(check(big), "Фото должно быть не больше 10 МБ.");
     assert.equal(check({ type: "image/jpeg", size: app.PHOTO_MAX_SIZE }), "");
   });
 });

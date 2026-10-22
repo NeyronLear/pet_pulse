@@ -112,8 +112,10 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Загруженные файлы (фото питомцев)
-MEDIA_URL = "media/"
+# Загруженные файлы (фото питомцев).
+# С начальным слэшем: иначе photo.url получается относительным
+# («media/...») и браузер на /user/ склеивает его в /user/media/..., 404.
+MEDIA_URL = "/media/"
 
 MEDIA_ROOT = BASE_DIR / "media"
 

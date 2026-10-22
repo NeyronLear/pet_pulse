@@ -9,6 +9,10 @@ server {
     ssl_certificate     /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
 
+    # Django сам режет фото по PHOTO_MAX_SIZE во views.py (10МБ) и отвечает
+    # понятной ошибкой; 12МБ даёт допустимый запас на multipart-обвязку
+    client_max_body_size 12m;
+
     location /static/ {
         alias /var/www/static/;
         # имена файлов без хеша: браузер должен сверяться с сервером (ETag),
