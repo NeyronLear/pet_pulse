@@ -64,8 +64,14 @@ const byDateTime = (a, b) =>
 // ---------- Данные ----------
 
 // Ключи state совпадают с моделями Django: pets — Pet, history — History,
-// food — Food, medCards — MedCard.
-const emptyState = () => ({ pets: [], history: [], food: [], medCards: [] });
+// food — Food, medCards — MedCard, weights — WeightEntry.
+const emptyState = () => ({
+  pets: [],
+  history: [],
+  food: [],
+  medCards: [],
+  weights: [],
+});
 
 // History хранит и напоминания, и записи здоровья: невыполненные записи
 // показываются как напоминания, выполненные — на странице «Здоровье».
@@ -221,6 +227,21 @@ const RESOURCES = {
       notes: card.notes,
     }),
   },
+  weights: {
+    path: (petId) => `/weight/${petId}`,
+    fromServer: (row) => ({
+      id: row.id,
+      pet: row.pet,
+      weight: row.weight ?? "",
+      date: row.date,
+    }),
+    toServer: (entry) => ({
+      id: entry.id,
+      pet: Number(entry.pet),
+      weight: entry.weight === "" ? null : entry.weight,
+      date: entry.date,
+    }),
+  },
 };
 
 // У питомца может ещё не быть медкарты: это не ошибка.
@@ -239,15 +260,17 @@ const api = {
     );
     const perPet = await Promise.all(
       pets.map(async ({ id }) => {
-        const [history, food, medCard] = await Promise.all([
+        const [history, food, medCard, weights] = await Promise.all([
           request("GET", RESOURCES.history.path(id)),
           request("GET", RESOURCES.food.path(id)),
           request("GET", RESOURCES.medCards.path(id)).catch(ignoreNotFound),
+          request("GET", RESOURCES.weights.path(id)),
         ]);
         return {
           history: history.map(RESOURCES.history.fromServer),
           food: food.map(RESOURCES.food.fromServer),
           medCards: medCard?.id == null ? [] : [RESOURCES.medCards.fromServer(medCard)],
+          weights: weights.map(RESOURCES.weights.fromServer),
         };
       }),
     );
@@ -256,6 +279,7 @@ const api = {
       history: perPet.flatMap((part) => part.history),
       food: perPet.flatMap((part) => part.food),
       medCards: perPet.flatMap((part) => part.medCards),
+      weights: perPet.flatMap((part) => part.weights),
     };
   },
   // Нет id — создаём (POST), есть — обновляем (PUT, id уходит в теле запроса).
@@ -319,6 +343,16 @@ function replaceItem(bucket, saved) {
   else state[bucket][index] = saved;
 }
 
+// Сервер обновляет замер веса вместе с медкартой (см. _remember_weight во views.py),
+// поэтому после сохранения карты замеры перечитываем — иначе график отстанет.
+async function reloadWeights() {
+  state.weights = (
+    await Promise.all(
+      state.pets.map(({ id }) => request("GET", RESOURCES.weights.path(id))),
+    )
+  ).flatMap((list) => list.map(RESOURCES.weights.fromServer));
+}
+
 async function saveItem(bucket, item) {
   const saved = await api.save(bucket, item);
   replaceItem(bucket, saved);
@@ -333,6 +367,48 @@ async function removeItem(bucket, id) {
 }
 
 const petName = (id) => findById(state.pets, id)?.name ?? "Питомец не найден";
+
+// ---------- Сводка по питомцу ----------
+
+// Русские формы числительного: 1 год, 2 года, 5 лет.
+const plural = (n, [one, few, many]) => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  return mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20) ? few : many;
+};
+
+// Возраст словами: «2 года 3 месяца». Без даты рождения — "".
+function petAge(pet) {
+  if (!pet.birth || pet.birth > todayKey()) return "";
+  const born = new Date(`${pet.birth}T12:00:00`);
+  const now = new Date();
+  // полные месяцы: если день рождения в этом месяце ещё не наступил, месяц не засчитан
+  let months =
+    (now.getFullYear() - born.getFullYear()) * 12 + now.getMonth() - born.getMonth();
+  if (now.getDate() < born.getDate()) months -= 1;
+  if (months <= 0) return "меньше месяца";
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  return [
+    years && `${years} ${plural(years, ["год", "года", "лет"])}`,
+    rest && `${rest} ${plural(rest, ["месяц", "месяца", "месяцев"])}`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+const formatWeight = (value) =>
+  Number(value).toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+
+// Последний замер веса питомца: в state замеры идут по возрастанию даты.
+const lastWeight = (petId) => state.weights.filter((item) => sameId(item.pet, petId)).at(-1);
+
+// Ближайшее незавершённое напоминание питомца (сегодня и позже).
+const nextEventFor = (petId) =>
+  state.events
+    .filter((item) => sameId(item.pet, petId) && item.date >= todayKey())
+    .sort(byDateTime)[0];
 
 // Состояние интерфейса, которое не нужно хранить в базе.
 // push — состояние уведомлений в этом браузере, ключи PUSH_STATUS.
@@ -493,12 +569,22 @@ function petTag(id) {
 }
 
 function miniPet(pet) {
+  const age = petAge(pet);
+  const weight = lastWeight(pet.id);
+  const next = nextEventFor(pet.id);
   return html`
     <a class="mini-pet" href="#pets">
       ${petAvatar(pet)}
       <div>
         <strong>${pet.name}</strong>
         <p>${pet.species} · ${pet.breed || "Порода не указана"}</p>
+        <p class="pet-note">
+          ${[
+            age,
+            weight ? `${formatWeight(weight.weight)} кг` : "",
+            next ? `Ближайшее: ${formatDate(next.date)}` : "",
+          ].filter(Boolean).join(" · ") || "Данных пока нет"}
+        </p>
       </div>
     </a>`;
 }
@@ -524,6 +610,7 @@ function petCard(pet) {
   const healthRecords = state.health.filter((record) =>
     sameId(record.pet, pet.id),
   );
+  const weight = lastWeight(pet.id);
   return html`
     <article class="card pet-card">
       ${petAvatar(pet)}
@@ -532,6 +619,10 @@ function petCard(pet) {
       <dl>
         <dt>День рождения</dt>
         <dd>${pet.birth ? formatDate(pet.birth) : "Не указан"}</dd>
+        <dt>Возраст</dt>
+        <dd>${petAge(pet) || "Неизвестен"}</dd>
+        <dt>Последний вес</dt>
+        <dd>${weight ? `${formatWeight(weight.weight)} кг` : "не измерен"}</dd>
         <dt>Записей здоровья</dt>
         <dd>${healthRecords.length}</dd>
       </dl>
@@ -572,7 +663,11 @@ function medCard(pet) {
   const weight =
     card?.weight === "" || card?.weight == null
       ? "не указан"
-      : `${Number(card.weight).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} кг`;
+      : `${formatWeight(card.weight)} кг`;
+  const last = lastWeight(pet.id);
+  const points = state.weights
+    .filter((item) => sameId(item.pet, pet.id))
+    .sort((a, b) => a.date.localeCompare(b.date));
   return html`
     <article class="card record">
       <span class="eyebrow">МЕДКАРТА</span>
@@ -589,7 +684,15 @@ function medCard(pet) {
               <p>Заметки: ${card.notes || "нет"}</p>`
           : html`<p>Медкарта ещё не заполнена.</p>`
       }
+      <p class="day-label">ДИНАМИКА ВЕСА</p>
+      ${
+        points.length >= 2
+          ? html`<canvas class="weight-chart" data-pet="${pet.id}" width="560" height="180"></canvas>
+              <p class="muted">Последний замер: ${formatWeight(last.weight)} кг · ${formatDate(last.date)}</p>`
+          : html`<p class="muted">Для графика нужно хотя бы два замера.</p>`
+      }
       <div class="actions">
+        <button class="button light" data-action="add" data-kind="weight">+ Замер веса</button>
         <button class="button" data-action="edit" data-kind="medcard" data-id="${pet.id}">${card ? "Изменить" : "Заполнить"}</button>
       </div>
     </article>`;
@@ -807,6 +910,77 @@ function tamagochiCard() {
     </section>`;
 }
 
+// ---------- График динамики веса ----------
+
+// Простая линия по точкам на canvas: библиотеки не нужны.
+// canvas.width/height — размеры в пикселях, CSS растягивает по ширине карточки.
+function drawLineChart(canvas, points) {
+  const ctx = canvas.getContext?.("2d");
+  if (!ctx || points.length < 2) return;
+  const width = canvas.width;
+  const height = canvas.height;
+  const pad = { top: 18, right: 14, bottom: 26, left: 44 };
+  const values = points.map((point) => Number(point.weight));
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  // одна точка не задаёт масштаб: расширяем диапазон вокруг единственного значения
+  const low = min === max ? min - 1 : min - (max - min) * 0.15;
+  const high = min === max ? max + 1 : max + (max - min) * 0.15;
+  const x = (index) => pad.left + (index / (points.length - 1)) * (width - pad.left - pad.right);
+  const y = (value) =>
+    pad.top + (1 - (value - low) / (high - low)) * (height - pad.top - pad.bottom);
+
+  ctx.clearRect(0, 0, width, height);
+  // сетка и подписи шкал
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "#dfe9e4";
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(width - pad.right, pad.top);
+  ctx.moveTo(pad.left, height - pad.bottom);
+  ctx.lineTo(width - pad.right, height - pad.bottom);
+  ctx.stroke();
+  ctx.fillStyle = "#687570";
+  ctx.font = "11px Trebuchet MS, Arial, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillText(formatWeight(Math.round(high * 10) / 10), pad.left - 6, pad.top);
+  ctx.fillText(formatWeight(Math.round(low * 10) / 10), pad.left - 6, height - pad.bottom);
+
+  ctx.strokeStyle = "#258a67";
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  values.forEach((value, index) =>
+    index ? ctx.lineTo(x(index), y(value)) : ctx.moveTo(x(index), y(value)),
+  );
+  ctx.stroke();
+  ctx.fillStyle = "#258a67";
+  values.forEach((value, index) => {
+    ctx.beginPath();
+    ctx.arc(x(index), y(value), 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // даты по краям оси X
+  ctx.fillStyle = "#687570";
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  ctx.fillText(formatDate(points[0].date), pad.left, height - 7);
+  ctx.textAlign = "right";
+  ctx.fillText(formatDate(points[points.length - 1].date), width - pad.right, height - 7);
+}
+
+// innerHTML очищает и заменяет canvas, поэтому после каждой перерисовки графики рисуются заново.
+function drawWeightCharts() {
+  document.querySelectorAll("canvas[data-pet]").forEach((canvas) => {
+    const weights = state.weights
+      .filter((item) => sameId(item.pet, canvas.dataset.pet))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    drawLineChart(canvas, weights);
+  });
+}
+
 // ---------- Страницы и навигация ----------
 
 // title показывается во вкладке браузера: «<title> · PetPulse».
@@ -834,6 +1008,7 @@ function render() {
     .querySelectorAll("nav a")
     .forEach((link) => link.classList.toggle("active", link.hash === `#${page}`));
   $("#main").innerHTML = PAGES[page].view().toString();
+  drawWeightCharts();
 }
 
 // ---------- Форма добавления и редактирования ----------
@@ -994,6 +1169,30 @@ const EDITORS = {
       textareaField("chronic_conditions", "Хронические заболевания", card.chronic_conditions),
       textareaField("notes", "Заметки", card.notes),
     ],
+    afterSave: async (card) => {
+      await reloadWeights().catch(console.error);
+      return card;
+    },
+  },
+  // Замер веса хранится отдельно от «текущего» веса в медкарте:
+  // каждый замер — отдельная точка графика динамики.
+  weight: {
+    bucket: "weights",
+    title: (item) => (item ? "Замер веса" : "Новый замер веса"),
+    fields: (item = {}) => [
+      petField(),
+      inputField("weight", "Вес, кг", {
+        type: "number",
+        value: item.weight,
+        required: true,
+        attrs: html`step="0.01" min="0.01" max="9999.99"`,
+      }),
+      dateField(),
+    ],
+    check: (values) =>
+      values.date > todayKey()
+        ? "Дата замера не может быть в будущем."
+        : "",
   },
   profile: {
     noPet: true,

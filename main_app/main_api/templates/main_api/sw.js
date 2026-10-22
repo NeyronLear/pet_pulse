@@ -1,4 +1,5 @@
-{% load static %}"use strict";
+{% load static %}
+"use strict";
 
 // Service worker PetPulse: показывает push-уведомления, даже когда вкладка закрыта.
 // Отдаётся вьюхой service_worker по адресу /user/sw.js, поэтому управляет страницами /user/.

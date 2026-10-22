@@ -47,5 +47,7 @@ def send_push(user, title: str, body: str, url: str = "/user/") -> int:
                 # пользователь отписался или браузер сбросил подписку
                 subscription.delete()
             else:
-                logger.warning("Не удалось отправить push %s: %s", subscription.pk, error)
+                logger.warning(
+                    "Не удалось отправить push %s: %s", subscription.pk, error
+                )
     return sent

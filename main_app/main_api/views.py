@@ -24,7 +24,7 @@ from django.utils.dateparse import parse_date, parse_time
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
 
-from .models import Food, History, MedCard, Pet, PushSubscription, Tamagochi
+from .models import Food, History, MedCard, Pet, PushSubscription, Tamagochi, WeightEntry
 from .push import push_enabled
 
 
@@ -34,6 +34,7 @@ def test(request: HttpRequest) -> HttpResponse:
 
 
 # ---------- Общие утилиты ----------
+
 
 def _wants_json(request: HttpRequest) -> bool:
     """fetch() из script.js всегда шлёт Accept: application/json,
@@ -108,15 +109,6 @@ def _negative_weight(weight) -> bool:
         return False
 
 
-def _negative_weight(weight) -> bool:
-    """Модель не запрещает отрицательный вес, поэтому проверяем здесь.
-    Нечисловое значение отсеет full_clean()."""
-    try:
-        return weight not in ("", None) and Decimal(str(weight)) < 0
-    except InvalidOperation:
-        return False
-
-
 def _save(instance):
     """Проверяет модель (choices, длины, формат веса) и сохраняет.
     Возвращает ответ 400, если данные не прошли проверку, иначе None."""
@@ -129,6 +121,7 @@ def _save(instance):
 
 
 # ---------- Сериализация моделей в JSON, который ждёт script.js ----------
+
 
 def _iso(value):
     return value.isoformat() if value is not None else None
@@ -192,7 +185,17 @@ def tamagochi_to_json(pet: Tamagochi) -> dict:
     }
 
 
+def weight_to_json(entry: WeightEntry) -> dict:
+    return {
+        "id": entry.id,
+        "pet": entry.pet_id,
+        "weight": str(entry.weight),
+        "date": _iso(entry.date),
+    }
+
+
 # ---------- Главная страница + список питомцев (RESOURCES.pets.path === "/") ----------
+
 
 @method_decorator(ensure_csrf_cookie, name="get")
 class MainView(View):
@@ -262,6 +265,7 @@ PHOTO_MAX_SIZE = 5 * 1024 * 1024
 
 class PetPhotoForm(forms.Form):
     """ImageField через Pillow проверяет, что файл — действительно картинка."""
+
     photo = forms.ImageField(
         error_messages={
             "required": "Выберите фото.",
@@ -300,6 +304,7 @@ class PetPhotoView(LoginRequiredJsonMixin, View):
 
 
 # ---------- Регистрация, вход и выход (/auth/...) ----------
+
 
 def user_to_json(user) -> dict:
     return {
@@ -476,6 +481,7 @@ class PasswordView(LoginRequiredJsonMixin, View):
 
 # ---------- История / напоминания (RESOURCES.history.path === "/history/<pet_id>") ----------
 
+
 class HistoryView(LoginRequiredJsonMixin, View):
     """CRUD записей History одного питомца.
     done=False — напоминание, done=True — запись здоровья (см. state в script.js)."""
@@ -550,6 +556,7 @@ class HistoryView(LoginRequiredJsonMixin, View):
 
 # ---------- Медкарта (RESOURCES.medCards.path === "/med_card/<pet_id>") ----------
 
+
 class MedcardView(LoginRequiredJsonMixin, View):
     """У питомца не более одной медкарты (OneToOne). Отсутствие карты — это 404,
     script.js ловит такую ошибку через ignoreNotFound и не считает её сбоем."""
@@ -582,7 +589,11 @@ class MedcardView(LoginRequiredJsonMixin, View):
             chronic_conditions=data.get("chronic_conditions") or "",
             notes=data.get("notes") or "",
         )
-        return _save(card) or JsonResponse(medcard_to_json(card), status=201)
+        error = _save(card)
+        if error:
+            return error
+        _remember_weight(pet, weight if weight not in ("", None) else None)
+        return JsonResponse(medcard_to_json(card), status=201)
 
     def put(self, request: HttpRequest, pet_id: int):
         _pet(request, pet_id)
@@ -595,7 +606,7 @@ class MedcardView(LoginRequiredJsonMixin, View):
         weight = data.get("weight")
         if _negative_weight(weight):
             return bad_request("Вес не может быть отрицательным.")
-        card.weight =weight if weight not in ("", None) else None
+        card.weight = weight if weight not in ("", None) else None
         card.allergies = data.get("allergies") or ""
         card.chronic_conditions = data.get("chronic_conditions") or ""
         card.notes = data.get("notes") or ""
@@ -604,6 +615,7 @@ class MedcardView(LoginRequiredJsonMixin, View):
         except ValidationError as error:
             return bad_request("; ".join(error.messages))
         card.save()
+        _remember_weight(card.pet, weight if weight not in ("", None) else None)
         return JsonResponse(medcard_to_json(card))
 
     def delete(self, request: HttpRequest, pet_id: int):
@@ -616,7 +628,76 @@ class MedcardView(LoginRequiredJsonMixin, View):
         return JsonResponse(None, safe=False, status=204)
 
 
+# ---------- Замеры веса (RESOURCES.weights.path === "/weight/<pet_id>") ----------
+
+def _remember_weight(pet: Pet, weight):
+    """Сохранённый в медкарте вес — это замер на день сохранения:
+    он же попадает в график динамики веса (один замер на дату)."""
+    if weight in ("", None):
+        return
+    WeightEntry.objects.update_or_create(
+        pet=pet, date=date.today(), defaults={"weight": weight},
+    )
+
+
+class WeightView(LoginRequiredJsonMixin, View):
+    """CRUD замеров веса одного питомца — данные для графика динамики."""
+
+    def get(self, request: HttpRequest, pet_id: int):
+        _pet(request, pet_id)
+        entries = WeightEntry.objects.filter(pet_id=pet_id).order_by("date", "id")
+        return JsonResponse([weight_to_json(entry) for entry in entries], safe=False)
+
+    def post(self, request: HttpRequest, pet_id: int):
+        pet = _pet(request, pet_id)
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        if not data.get("weight") or not data.get("date"):
+            return bad_request("Дата и вес обязательны.")
+        if _negative_weight(data.get("weight")):
+            return bad_request("Вес не может быть отрицательным.")
+
+        try:
+            # число из JSON (4.95) у Decimal даёт длинный хвост, поэтому вес — всегда строка
+            entry = WeightEntry(pet=pet, weight=str(data.get("weight")), date=_date(data.get("date")))
+        except ValueError:
+            return bad_request("Неверный формат даты.")
+        return _save(entry) or JsonResponse(weight_to_json(entry), status=201)
+
+    def put(self, request: HttpRequest, pet_id: int):
+        _pet(request, pet_id)
+        try:
+            data = _body(request)
+        except ValueError:
+            return bad_request("Некорректный JSON.")
+
+        entry = get_object_or_404(WeightEntry, pk=data.get("id"), pet_id=pet_id)
+        if not data.get("weight"):
+            return bad_request("Вес обязателен.")
+        if _negative_weight(data.get("weight")):
+            return bad_request("Вес не может быть отрицательным.")
+        entry.weight = str(data.get("weight"))
+        try:
+            entry.date = _date(data.get("date"))
+        except ValueError:
+            return bad_request("Неверный формат даты.")
+        return _save(entry) or JsonResponse(weight_to_json(entry))
+
+    def delete(self, request: HttpRequest, pet_id: int):
+        _pet(request, pet_id)
+        entry_id = request.GET.get("id")
+        if not entry_id or not entry_id.isdigit():
+            return bad_request("Не передан id записи.")
+        entry = get_object_or_404(WeightEntry, pk=entry_id, pet_id=pet_id)
+        entry.delete()
+        return JsonResponse(None, safe=False, status=204)
+
+
 # ---------- Питание (RESOURCES.food.path === "/food/<pet_id>") ----------
+
 
 class FoodView(LoginRequiredJsonMixin, View):
     """CRUD записей Food одного питомца."""
@@ -687,6 +768,7 @@ class FoodView(LoginRequiredJsonMixin, View):
 
 # ---------- Тамагочи (tamagochi.path === "/tamagochi") ----------
 
+
 class TamagochiView(LoginRequiredJsonMixin, View):
     """У пользователя не более одного тамагочи (OneToOne), поэтому id не нужен.
     Отсутствие тамагочи — это 404, как у медкарты."""
@@ -733,6 +815,7 @@ class TamagochiView(LoginRequiredJsonMixin, View):
 
 
 # ---------- Push-уведомления (/push/...) ----------
+
 
 def service_worker(request: HttpRequest) -> HttpResponse:
     """Service worker должен лежать не глубже страниц, которыми управляет:
