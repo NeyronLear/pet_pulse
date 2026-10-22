@@ -40,6 +40,7 @@ services:
     volumes:
       - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - static:/var/www/static:ro
+      - media:/var/www/media:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       server:

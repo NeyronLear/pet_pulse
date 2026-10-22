@@ -1049,7 +1049,8 @@ const textareaField = (name, label, value = "") => html`
   </div>`;
 const noteField = () => textareaField("note", "Наблюдения и заметки");
 
-// Ограничение сервера (PHOTO_MAX_SIZE во views.py) проверяем заранее, чтобы не гонять большой файл зря.
+// Ограничение сервера: PHOTO_MAX_SIZE во views.py = 10МБ, nginx режет по 12МБ.
+// Проверяем заранее, чтобы не гонять большой файл зря.
 const PHOTO_MAX_SIZE = 10 * 1024 * 1024;
 
 const photoField = (pet) => html`
