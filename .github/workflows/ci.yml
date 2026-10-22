@@ -79,6 +79,7 @@ jobs:
         run: |
           eval $(ssh-agent -s)
           echo "${{ secrets.SSH_PRIVATE_KEY }}" | tr -d '\r' | ssh-add -
+          ssh-add -l
           mkdir -p ~/.ssh && echo "StrictHostKeyChecking no" >> ~/.ssh/config
           
           SERVER="${{ secrets.SERVER_USER }}@${{ secrets.SERVER_IP }}"
