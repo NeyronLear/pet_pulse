@@ -15,6 +15,7 @@ services:
     volumes:
       - static:/app/main_app/staticfiles
       - db:/data
+      - media:/app/main_app/media
 
     healthcheck:
       test:
@@ -47,3 +48,4 @@ services:
 volumes:
   static:
   db:
+  media:
