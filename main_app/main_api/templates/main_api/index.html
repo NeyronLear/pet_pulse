@@ -142,6 +142,24 @@
     </div>
   </form>
 </dialog>
+    <dialog id="chart-viewer" aria-labelledby="chart-title">
+  <div class="dialog-top">
+    <div class="dialog-heading">
+      <span class="dialog-kicker">ВЕС</span>
+      <h2 id="chart-title">Динамика веса</h2>
+    </div>
+
+    <button
+      id="chart-close"
+      type="button"
+      class="icon"
+      aria-label="Закрыть график"
+      title="Закрыть"
+    >×</button>
+  </div>
+
+  <canvas id="big-weight-chart" width="1100" height="460"></canvas>
+</dialog>
     <div id="toast" role="status"></div>
   </body>
 </html>

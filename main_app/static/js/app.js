@@ -416,6 +416,8 @@ const ui = {
   day: todayKey(),
   foodFilter: "Все",
   editing: null,
+  // Недозаполненная форма медкарты: пока в окне открыт редактор замера веса.
+  pendingMedcard: null,
   user: null,
   push: "unsupported",
 };
@@ -687,13 +689,20 @@ function medCard(pet) {
       <p class="day-label">ДИНАМИКА ВЕСА</p>
       ${
         points.length >= 2
-          ? html`<canvas class="weight-chart" data-pet="${pet.id}" width="560" height="180"></canvas>
-              <p class="muted">Последний замер: ${formatWeight(last.weight)} кг · ${formatDate(last.date)}</p>`
-          : html`<p class="muted">Для графика нужно хотя бы два замера.</p>`
+          ? html`<canvas
+                class="weight-chart"
+                data-pet="${pet.id}"
+                data-action="expand-weight-chart"
+                role="button"
+                title="Развернуть график"
+                width="720"
+                height="250"
+              ></canvas>
+              <p class="muted chart-caption">Последний замер: ${formatWeight(last.weight)} кг · ${formatDate(last.date)} · нажмите на график, чтобы развернуть</p>`
+          : html`<p class="muted">Для графика нужно хотя бы два замера — вписывайте вес в медкарте или добавляйте замер за другую дату в её форме.</p>`
       }
-      <div class="actions">
-        <button class="button light" data-action="add" data-kind="weight">+ Замер веса</button>
-        <button class="button" data-action="edit" data-kind="medcard" data-id="${pet.id}">${card ? "Изменить" : "Заполнить"}</button>
+      <div class="actions center">
+        <button class="button light full" data-action="edit" data-kind="medcard" data-id="${pet.id}">${card ? "Изменить" : "Заполнить"}</button>
       </div>
     </article>`;
 }
@@ -914,12 +923,15 @@ function tamagochiCard() {
 
 // Простая линия по точкам на canvas: библиотеки не нужны.
 // canvas.width/height — размеры в пикселях, CSS растягивает по ширине карточки.
+// width > 800px — большое окно развёрнутого графика: масштабируем линии и подписи.
 function drawLineChart(canvas, points) {
   const ctx = canvas.getContext?.("2d");
   if (!ctx || points.length < 2) return;
   const width = canvas.width;
   const height = canvas.height;
+  const scale = width > 800 ? 1.7 : 1;
   const pad = { top: 18, right: 14, bottom: 26, left: 44 };
+  for (const key of Object.keys(pad)) pad[key] *= scale;
   const values = points.map((point) => Number(point.weight));
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -941,14 +953,14 @@ function drawLineChart(canvas, points) {
   ctx.lineTo(width - pad.right, height - pad.bottom);
   ctx.stroke();
   ctx.fillStyle = "#687570";
-  ctx.font = "11px Trebuchet MS, Arial, sans-serif";
+  ctx.font = `${Math.round(11 * scale)}px Trebuchet MS, Arial, sans-serif`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.fillText(formatWeight(Math.round(high * 10) / 10), pad.left - 6, pad.top);
   ctx.fillText(formatWeight(Math.round(low * 10) / 10), pad.left - 6, height - pad.bottom);
 
   ctx.strokeStyle = "#258a67";
-  ctx.lineWidth = 2.5;
+  ctx.lineWidth = 2.5 * scale;
   ctx.lineJoin = "round";
   ctx.beginPath();
   values.forEach((value, index) =>
@@ -958,17 +970,30 @@ function drawLineChart(canvas, points) {
   ctx.fillStyle = "#258a67";
   values.forEach((value, index) => {
     ctx.beginPath();
-    ctx.arc(x(index), y(value), 3.5, 0, Math.PI * 2);
+    ctx.arc(x(index), y(value), 3.5 * scale, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // даты по краям оси X
+  // даты по оси X: первая, последняя и промежуточные, если они не слипаются.
+  // Минимальный зазор gap подобран под ширину подписи «1 окт.» при 11px.
   ctx.fillStyle = "#687570";
   ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left";
-  ctx.fillText(formatDate(points[0].date), pad.left, height - 7);
-  ctx.textAlign = "right";
-  ctx.fillText(formatDate(points[points.length - 1].date), width - pad.right, height - 7);
+  const gap = 52 * scale;
+  const spacing = (width - pad.left - pad.right) / (points.length - 1);
+  const step = Math.max(1, Math.ceil(gap / spacing));
+  const indexes = [];
+  for (let i = 0; i < points.length; i += step) indexes.push(i);
+  if (indexes.at(-1) !== points.length - 1) indexes.push(points.length - 1);
+  const edgeGap = 55 * scale; // подпись у кромки не должна налезать на метки в углах
+  indexes.forEach((index) => {
+    const isLast = index === points.length - 1;
+    const px = x(index);
+    if (index !== 0 && !isLast && (px - pad.left < edgeGap || width - pad.right - px < edgeGap)) return;
+    const align = isLast ? "right" : "left";
+    const pxX = isLast ? width - pad.right : px;
+    ctx.textAlign = align;
+    ctx.fillText(formatDate(points[index].date), pxX, height - 7 * scale);
+  });
 }
 
 // innerHTML очищает и заменяет canvas, поэтому после каждой перерисовки графики рисуются заново.
@@ -979,6 +1004,21 @@ function drawWeightCharts() {
       .sort((a, b) => a.date.localeCompare(b.date));
     drawLineChart(canvas, weights);
   });
+}
+
+// Большой график по клику на маленький в карточке (#chart-viewer в index.html):
+// то же черчение, но у canvas крупные внутренние размеры, поэтому всё читаемо.
+function openWeightChart(petId) {
+  const weights = state.weights
+    .filter((item) => sameId(item.pet, petId))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  if (weights.length < 2) {
+    toast("Для графика нужно хотя бы два замера.");
+    return;
+  }
+  $("#chart-title").textContent = `Динамика веса · ${findById(state.pets, petId)?.name ?? ""}`;
+  $("#chart-viewer").showModal();
+  drawLineChart($("#big-weight-chart"), weights);
 }
 
 // ---------- Страницы и навигация ----------
@@ -1166,6 +1206,10 @@ const EDITORS = {
         value: card.weight,
         attrs: html`step="0.01" min="0" max="9999.99"`,
       }),
+      html`<p class="muted">Сохранённый вес запишется в график динамики как замер за сегодня.</p>`,
+      html`<div class="field">
+        <button type="button" class="button light" data-action="weight-entry">Записать замер за другую дату</button>
+      </div>`,
       textareaField("allergies", "Аллергии", card.allergies),
       textareaField("chronic_conditions", "Хронические заболевания", card.chronic_conditions),
       textareaField("notes", "Заметки", card.notes),
@@ -1313,6 +1357,25 @@ $("#form").addEventListener("submit", async (event) => {
   $(selector).addEventListener("click", () => $("#editor").close()),
 );
 
+// Из замера веса возвращаемся к недозаполненной форме медкарты
+// и восстанавливаем всё, что пользователь успел вписать до замера.
+$("#editor").addEventListener("close", () => {
+  if (!ui.pendingMedcard) return;
+  const { petId, values } = ui.pendingMedcard;
+  ui.pendingMedcard = null;
+  openEditor("medcard", petId);
+  const form = $("#form");
+  for (const [name, value] of Object.entries(values)) {
+    if (form.elements[name]) form.elements[name].value = value;
+  }
+});
+
+// Большой график закрывается «×», Esc, кликом по затемнённому фону.
+$("#chart-close").addEventListener("click", () => $("#chart-viewer").close());
+$("#chart-viewer").addEventListener("click", (event) => {
+  if (event.target === $("#chart-viewer")) $("#chart-viewer").close();
+});
+
 // ---------- Действия по клику ----------
 
 // Сколько строка с отмеченным напоминанием остаётся на экране, пока играет анимация.
@@ -1334,6 +1397,23 @@ function fadeOut(element) {
 const actions = {
   add: ({ kind }) => openEditor(kind),
   edit: ({ kind, id }) => openEditor(kind, id),
+  // Отдельная кнопка замера с карточки убрана: замер за сегодня записывается
+  // полем «Вес» в форме медкарты, а за другую дату — отсюда, из её формы.
+  "weight-entry": () => {
+    const form = $("#form");
+    const values = Object.fromEntries(new FormData(form));
+    const { weight } = form.elements;
+    const petId = ui.editing?.id;
+    openEditor("weight");
+    // openEditor мог отказать (нет питомца): тогда остаёмся в форме медкарты
+    if (ui.editing?.kind !== "weight") return;
+    ui.pendingMedcard = { petId, values };
+    $("#field-pet").value = petId;
+    // вес обычно уже вписан в форму — подсказываем его в замер
+    if (weight.value) $("#field-weight").value = weight.value;
+  },
+  // Клик по графику карточки открывает его крупно в отдельном окне.
+  "expand-weight-chart": ({ pet }) => openWeightChart(pet),
   "select-day": ({ day }) => {
     ui.day = day;
     render();

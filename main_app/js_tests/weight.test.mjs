@@ -94,7 +94,7 @@ describe("медкарта и замеры веса", () => {
       weightPoint(2, "4.80", "2026-10-01"),
     ];
     const html = str(app.medCard(pet));
-    assert.match(html, /<canvas class="weight-chart" data-pet="1"/);
+    assert.match(html, /<canvas[^>]*class="weight-chart"[^>]*data-pet="1"/);
     assert.match(html, /Последний замер: 4,8 кг/);
   });
 
