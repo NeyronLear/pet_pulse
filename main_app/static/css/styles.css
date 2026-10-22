@@ -449,12 +449,39 @@ p {
 .weight-chart {
   display: block;
   width: 100%;
-  max-width: 560px;
+  max-width: 720px;
   height: auto;
   margin: 12px 0 6px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--paper);
+  cursor: zoom-in; /* клик разворачивает график в большое окно */
+}
+
+/* Развёрнутый график (#chart-viewer в index.html): внутренний размер canvas
+   1100x460, поэтому линии и подписи крупнее и читаемее */
+#chart-viewer {
+  max-width: 1160px;
+  padding: 24px;
+}
+#big-weight-chart {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 6px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper);
+}
+
+/* Подпись сразу под графиком в медкарте: без лишних отступов абзаца */
+.chart-caption {
+  margin: 0 0 4px;
+}
+
+/* Центрируем кнопки у медкарты, вместо прижатия к правому краю */
+.actions.center {
+  justify-content: center;
 }
 .tip {
   background: var(--yellow);
