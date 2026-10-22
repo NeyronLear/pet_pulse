@@ -110,6 +110,20 @@ jobs:
             # Загрузка нового образа, перезапуск контейнеров и чистка мусора
             sudo IMAGE_NAME=${{ env.IMAGE_NAME }} docker compose pull
             sudo IMAGE_NAME=${{ env.IMAGE_NAME }} docker compose up -d --remove-orphans
+            sudo DJANGO_SUPERUSER_USERNAME=${{ secrets.SUPERUSER_USERNAME }} \
+                 DJANGO_SUPERUSER_EMAIL=${{ secrets.SUPERUSER_EMAIL }} \
+                 DJANGO_SUPERUSER_PASSWORD=${{ secrets.SUPERUSER_PASSWORD }} \
+                 docker compose exec -T server sh -c '\
+                   python manage.py shell -c "
+            from django.contrib.auth import get_user_model
+            U = get_user_model()
+            u, created = U.objects.get_or_create(
+                username=\"$DJANGO_SUPERUSER_USERNAME\",
+                defaults={\"email\": \"$DJANGO_SUPERUSER_EMAIL\"})
+            u.set_password(\"$DJANGO_SUPERUSER_PASSWORD\")
+            u.is_staff = u.is_superuser = True
+            u.save()
+            print(\"superuser ok\")"'
             sudo docker image prune -f
             
             # Восстановление Крон-задачи для рассылки напоминаний Django (каждый день в 06:00 UTC)
